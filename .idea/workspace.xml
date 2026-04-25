@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1">
+    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1.1">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/script.js" beforeDir="false" afterPath="$PROJECT_DIR$/script.js" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/style.css" afterDir="false" />
@@ -20,12 +20,12 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
-  "lastFilter": {
-    "state": "OPEN",
-    "assignee": "asa07-salihg"
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;asa07-salihg&quot;
   }
-}]]></component>
+}</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/asa07-salihg/Starchild-Vanguard.git&quot;,
@@ -79,7 +79,7 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1775804092581</updated>
-      <workItem from="1777094374464" duration="6575000" />
+      <workItem from="1777094374464" duration="7285000" />
     </task>
     <task id="LOCAL-00001" summary="project v1">
       <option name="closed" value="true" />
@@ -89,7 +89,15 @@
       <option name="project" value="LOCAL" />
       <updated>1777100497375</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="project v1">
+      <option name="closed" value="true" />
+      <created>1777101063829</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1777101063829</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -108,7 +116,8 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="project v1" />
-    <option name="LAST_COMMIT_MESSAGE" value="project v1" />
+    <MESSAGE value="project v1.1" />
+    <option name="LAST_COMMIT_MESSAGE" value="project v1.1" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

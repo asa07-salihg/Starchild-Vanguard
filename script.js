@@ -72,7 +72,7 @@ const state = {
   rows: 0,
   cols: 0,
   cell: 16,
-  pad: 16,
+  pad: { x: 16, y: 16 },
   player: { r: 0, c: 0, x: 0, y: 0, tx: 0, ty: 0, moving: false },
   exit: { r: 0, c: 0 },
   moves: 0,
@@ -244,11 +244,17 @@ function computeCanvasMetrics() {
   state.canvasPx.h = height;
   state.staticDirty = true;
 
-  const pad = Math.floor(14 * dpr);
-  const cell = Math.floor(Math.min((width - pad * 2) / state.cols, (height - pad * 2) / state.rows));
-
-  state.pad = pad;
+  const outerPad = Math.floor(14 * dpr);
+  const cell = Math.floor(Math.min((width - outerPad * 2) / state.cols, (height - outerPad * 2) / state.rows));
   state.cell = clamp(cell, Math.floor(10 * dpr), Math.floor(28 * dpr));
+
+  // Center the maze inside the canvas
+  const mazeW = state.cols * state.cell;
+  const mazeH = state.rows * state.cell;
+  state.pad = {
+    x: Math.floor((width - mazeW) / 2),
+    y: Math.floor((height - mazeH) / 2),
+  };
 }
 
 function rebuildStaticLayer() {
@@ -304,8 +310,8 @@ function rebuildStaticLayer() {
 }
 
 function cellCenter(r, c) {
-  const x = state.pad + c * state.cell + state.cell / 2;
-  const y = state.pad + r * state.cell + state.cell / 2;
+  const x = state.pad.x + c * state.cell + state.cell / 2;
+  const y = state.pad.y + r * state.cell + state.cell / 2;
   return { x, y };
 }
 
@@ -408,8 +414,8 @@ function drawMaze() {
 }
 
 function strokeMazeWalls(ctx) {
-  const x0 = state.pad;
-  const y0 = state.pad;
+  const x0 = state.pad.x;
+  const y0 = state.pad.y;
   const cell = state.cell;
 
   ctx.beginPath();

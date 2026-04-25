@@ -168,6 +168,15 @@ body[data-modal="open"] .themebar{display:none}
 }
 .screen--active{display:flex}
 
+/* Maze layout: stack maze + controls vertically (mobile-first) */
+#screenMaze.screen--active{
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  width:100%;
+}
+
 .card{
   width:min(520px, 100%);
   border-radius:var(--radius-xl);
@@ -249,20 +258,20 @@ body[data-modal="open"] .themebar{display:none}
 /* PLAYFIELD */
 .playfield{
   width:100%;
-  height:100%;
-  min-height:0;
+  flex:0 0 auto;
   display:flex;
   flex-direction:column;
   align-items:center;
-  justify-content:space-between;
+  justify-content:center;
   gap:12px;
   padding:4px 0;
 }
 
 .maze-frame{
   width:min(560px, 100%);
-  flex:1;
-  min-height:0;
+  flex:0 0 auto;
+  aspect-ratio:3 / 4;
+  max-height:58svh;
   display:flex;
   align-items:center;
   justify-content:center;
@@ -285,20 +294,8 @@ body[data-modal="open"] .themebar{display:none}
   pointer-events:none;
 }
 
-/* Film strip perforations */
-.maze-frame::after{
-  content:"";
-  position:absolute;
-  top:10px; bottom:10px;
-  left:10px; right:10px;
-  background:
-    radial-gradient(circle at 10px 10px, rgba(234,247,255,.24) 0 2px, transparent 3px) 0 0/44px 44px,
-    radial-gradient(circle at calc(100% - 10px) 10px, rgba(234,247,255,.20) 0 2px, transparent 3px) 0 0/44px 44px;
-  opacity:.35;
-  pointer-events:none;
-  mask:
-    linear-gradient(90deg, #000 0 40px, transparent 40px calc(100% - 40px), #000 calc(100% - 40px) 100%);
-}
+/* (removed) film strip perforations */
+.maze-frame::after{content:none}
 
 .maze-canvas{
   width:100%;

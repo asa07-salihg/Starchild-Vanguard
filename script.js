@@ -472,10 +472,10 @@ function drawPlayer(ctx) {
   const r = state.cell * 0.22;
 
   ctx.save();
-  // Black core + subtle white glow (no ring/outline)
+  // Pure white player marker
   ctx.shadowBlur = 10 * dpr;
-  ctx.shadowColor = "rgba(255,255,255,.55)";
-  ctx.fillStyle = "#000000";
+  ctx.shadowColor = rgbaFromVar("--primary-rgb", 0.22);
+  ctx.fillStyle = "#ffffff";
   ctx.beginPath();
   ctx.arc(state.player.x, state.player.y, r, 0, Math.PI * 2);
   ctx.fill();

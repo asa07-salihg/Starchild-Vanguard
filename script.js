@@ -142,6 +142,7 @@ function openModal({ title, text, primary }, onPrimary) {
   els.modalText.textContent = text;
   els.modal.classList.add("modal--open");
   els.modal.setAttribute("aria-hidden", "false");
+  document.body.dataset.modal = "open";
 
   const handler = () => {
     els.modalPrimaryBtn.removeEventListener("click", handler);
@@ -155,6 +156,7 @@ function openModal({ title, text, primary }, onPrimary) {
 function closeModal() {
   els.modal.classList.remove("modal--open");
   els.modal.setAttribute("aria-hidden", "true");
+  delete document.body.dataset.modal;
 }
 
 // ---------------------------

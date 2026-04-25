@@ -74,6 +74,9 @@ a{color:inherit; text-decoration:none}
   backdrop-filter:blur(10px);
   z-index:50;
 }
+
+/* Prevent theme bar overlapping dialogs */
+body[data-modal="open"] .themebar{display:none}
 .themebar__label{
   font-weight:900;
   letter-spacing:.04em;

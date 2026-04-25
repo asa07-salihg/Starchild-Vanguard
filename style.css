@@ -177,9 +177,10 @@ body[data-screen="screenWin"] .themebar{display:none}
 #screenMaze.screen--active{
   flex-direction:column;
   align-items:center;
-  justify-content:center;
+  justify-content:space-between;
   gap:12px;
   width:100%;
+  padding-bottom:calc(8px + var(--safe-bottom));
 }
 
 .card{
@@ -263,7 +264,7 @@ body[data-screen="screenWin"] .themebar{display:none}
 /* PLAYFIELD */
 .playfield{
   width:100%;
-  flex:0 0 auto;
+  flex:1 1 auto;
   display:flex;
   flex-direction:column;
   align-items:center;
@@ -339,7 +340,7 @@ body[data-screen="screenWin"] .themebar{display:none}
 
 .controls{
   width:min(560px, 100%);
-  padding:10px;
+  padding:14px;
   border-radius:var(--radius-xl);
   border:1px solid rgba(var(--primary-rgb),.16);
   background:linear-gradient(180deg, rgba(12,22,33,.72), rgba(9,16,25,.58));
@@ -347,19 +348,20 @@ body[data-screen="screenWin"] .themebar{display:none}
   display:flex;
   flex-direction:column;
   align-items:center;
-  gap:10px;
-  margin-top:-2px;
+  gap:12px;
+  margin-top:0;
+  margin-bottom:6px;
 }
 .controls__row{display:flex; align-items:center; justify-content:center; gap:10px}
 .dpad{
-  width:calc(var(--tap) + 10px);
-  height:calc(var(--tap) + 10px);
+  width:calc(var(--tap) + 18px);
+  height:calc(var(--tap) + 18px);
   border-radius:18px;
   border:1px solid rgba(var(--primary-rgb),.22);
   background:rgba(var(--primary-rgb),.08);
   color:var(--primary-2);
   font-weight:900;
-  font-size:18px;
+  font-size:20px;
   display:flex;
   align-items:center;
   justify-content:center;

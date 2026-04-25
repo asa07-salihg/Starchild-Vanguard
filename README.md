@@ -1,5 +1,7 @@
 # Starchild Vanguard — Club Invite (Maze + Trivia)
 
+- https://asa07-salihg.github.io/Starchild-Vanguard/
+
 Mobile-first static site for GitHub Pages:
 - **Dynamic Maze** (procedurally generated every run)
 - **Trivia Mode** (film category, easy, non-repeating, large pool)

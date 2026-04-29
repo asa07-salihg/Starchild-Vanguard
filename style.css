@@ -352,23 +352,90 @@ body[data-screen="screenWin"] .themebar{display:none}
   margin-top:0;
   margin-bottom:6px;
 }
-.controls__row{display:flex; align-items:center; justify-content:center; gap:10px}
+
+/* Single D-pad cluster (plus shape) */
+.dpad-cluster{
+  position:relative;
+  width:240px;
+  height:184px;
+  display:block;
+}
+.dpad-cluster .dpad{position:absolute}
+.dpad-cluster .dpad--up{left:50%; top:0; transform:translateX(-50%)}
+.dpad-cluster .dpad--down{left:50%; bottom:0; transform:translateX(-50%)}
+.dpad-cluster .dpad--left{left:0; top:50%; transform:translateY(-50%)}
+.dpad-cluster .dpad--right{right:0; top:50%; transform:translateY(-50%)}
 .dpad{
-  width:calc(var(--tap) + 18px);
-  height:calc(var(--tap) + 18px);
-  border-radius:18px;
-  border:1px solid rgba(var(--primary-rgb),.22);
-  background:rgba(var(--primary-rgb),.08);
-  color:var(--primary-2);
-  font-weight:900;
-  font-size:20px;
+  width:76px;
+  height:76px;
+  border-radius:20px;
+  border:0;
+  background:transparent;
   display:flex;
   align-items:center;
   justify-content:center;
   user-select:none;
   -webkit-tap-highlight-color:transparent;
+  position:relative;
 }
-.dpad:active{transform:translateY(1px)}
+.dpad:active{filter:brightness(1.06)}
+
+/* Remove old row layout (no longer used) */
+.controls__row{display:none}
+
+/* Hollow arrow-outline (no filled icon inside) */
+.dpad::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  border-radius:20px;
+  background:
+    radial-gradient(120px 120px at 35% 30%, rgba(var(--primary2-rgb), .18), transparent 55%),
+    radial-gradient(140px 120px at 60% 70%, rgba(var(--primary-rgb), .12), transparent 60%),
+    rgba(var(--primary-rgb), .06);
+  box-shadow:
+    0 18px 60px rgba(0,0,0,.35),
+    0 0 0 1px rgba(var(--primary-rgb), .18) inset,
+    0 14px 30px rgba(var(--primary-rgb), .12);
+  border:2px solid rgba(var(--primary-rgb), .38);
+  clip-path:polygon(
+    50% 8%,
+    86% 34%,
+    64% 34%,
+    64% 80%,
+    36% 80%,
+    36% 34%,
+    14% 34%
+  );
+}
+.dpad::after{
+  content:"";
+  position:absolute;
+  inset:4px;
+  border-radius:16px;
+  border:2px solid rgba(var(--primary2-rgb), .75);
+  clip-path:polygon(
+    50% 11%,
+    84% 34%,
+    62% 34%,
+    62% 78%,
+    38% 78%,
+    38% 34%,
+    16% 34%
+  );
+}
+.dpad:active::before{
+  box-shadow:
+    0 16px 56px rgba(0,0,0,.35),
+    0 0 0 1px rgba(var(--primary-rgb), .22) inset,
+    0 18px 34px rgba(var(--primary-rgb), .18);
+}
+.dpad--right::before,
+.dpad--right::after{transform:rotate(90deg)}
+.dpad--down::before,
+.dpad--down::after{transform:rotate(180deg)}
+.dpad--left::before,
+.dpad--left::after{transform:rotate(270deg)}
 
 /* QUIZ */
 .quiz{display:flex; flex-direction:column; gap:12px}

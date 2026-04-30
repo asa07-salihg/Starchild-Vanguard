@@ -4,10 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1.2">
+    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1.3">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/index.html" beforeDir="false" afterPath="$PROJECT_DIR$/index.html" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/style.css" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/script.js" beforeDir="false" afterPath="$PROJECT_DIR$/script.js" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -52,6 +51,7 @@
     &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
     &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
     &quot;git-widget-placeholder&quot;: &quot;main&quot;,
+    &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;javascript.preferred.runtime.type.id&quot;: &quot;node&quot;,
     &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;C:/Users/ahmet salih golen/IdeaProjects/Starchild-Vanguard/img&quot;,
@@ -80,7 +80,8 @@
       <workItem from="1777094374464" duration="7988000" />
       <workItem from="1777102641557" duration="196000" />
       <workItem from="1777108713998" duration="224000" />
-      <workItem from="1777470866921" duration="1011000" />
+      <workItem from="1777470866921" duration="1266000" />
+      <workItem from="1777569352555" duration="667000" />
     </task>
     <task id="LOCAL-00001" summary="project v1">
       <option name="closed" value="true" />
@@ -154,7 +155,15 @@
       <option name="project" value="LOCAL" />
       <updated>1777108801248</updated>
     </task>
-    <option name="localTasksCounter" value="10" />
+    <task id="LOCAL-00010" summary="project v1.3">
+      <option name="closed" value="true" />
+      <created>1777472083480</created>
+      <option name="number" value="00010" />
+      <option name="presentableId" value="LOCAL-00010" />
+      <option name="project" value="LOCAL" />
+      <updated>1777472083480</updated>
+    </task>
+    <option name="localTasksCounter" value="11" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -175,7 +184,8 @@
     <MESSAGE value="project v1" />
     <MESSAGE value="project v1.1" />
     <MESSAGE value="project v1.2" />
-    <option name="LAST_COMMIT_MESSAGE" value="project v1.2" />
+    <MESSAGE value="project v1.3" />
+    <option name="LAST_COMMIT_MESSAGE" value="project v1.3" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

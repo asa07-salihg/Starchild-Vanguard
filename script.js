@@ -16,6 +16,10 @@ const DIR = {
   W: 3,
 };
 
+function oppositeDir(d) {
+  return (d + 2) % 4;
+}
+
 // bitmask walls (N=1, E=2, S=4, W=8) => 2D array as requested
 const WALL = {
   N: 1,
@@ -86,6 +90,7 @@ const state = {
   inputHeld: false,
   inputBufferDir: null,
   inputBufferUntil: 0,
+  autoDir: null,
   lastTickTs: 0,
 
   // Quiz
@@ -318,7 +323,7 @@ function cellCenter(r, c) {
 function startMaze({ difficulty = "hard" } = {}) {
   // mobile-first sizes (portrait): wider than tall is rare; keep it challenging
   const rows = difficulty === "hard" ? 23 : 17;
-  const cols = difficulty === "hard" ? 15 : 13;
+  const cols = difficulty === "hard" ? 17 : 15;
 
   state.rows = rows;
   state.cols = cols;
@@ -350,6 +355,26 @@ function canStep(r, c, dir) {
   if (dir === DIR.S) return (w & WALL.S) === 0;
   if (dir === DIR.W) return (w & WALL.W) === 0;
   return false;
+}
+
+function openingsAt(r, c) {
+  let count = 0;
+  if (canStep(r, c, DIR.N)) count++;
+  if (canStep(r, c, DIR.E)) count++;
+  if (canStep(r, c, DIR.S)) count++;
+  if (canStep(r, c, DIR.W)) count++;
+  return count;
+}
+
+function shouldAutoContinue(dir) {
+  // Continue only through straight corridors: exactly 2 exits (forward + back).
+  const r = state.player.r;
+  const c = state.player.c;
+  if (!canStep(r, c, dir)) return false;
+  const deg = openingsAt(r, c);
+  if (deg !== 2) return false;
+  if (!canStep(r, c, oppositeDir(dir))) return false;
+  return true;
 }
 
 function tryMove(dir) {
@@ -492,6 +517,7 @@ function tick() {
     const prev = state.lastTickTs || t;
     const dt = clamp(t - prev, 0, 40); // ms
     state.lastTickTs = t;
+    let arrivedThisFrame = false;
 
     // smooth movement
     if (state.player.moving) {
@@ -506,14 +532,27 @@ function tick() {
         state.player.x = state.player.tx;
         state.player.y = state.player.ty;
         state.player.moving = false;
+        arrivedThisFrame = true;
       } else {
         state.player.x += (dx / dist) * stepDist;
         state.player.y += (dy / dist) * stepDist;
       }
     }
 
-    // If a direction is held, keep stepping.
+    // Avoid starting a new tile-move in the same frame we just snapped.
+    if (!arrivedThisFrame) {
+    // Keep moving until a turn/junction when autoDir is set.
+    if (!state.player.moving && state.autoDir != null) {
+      if (shouldAutoContinue(state.autoDir)) {
+        tryMove(state.autoDir);
+      } else {
+        state.autoDir = null;
+      }
+    }
+
+    // If a direction is held, keep stepping (enables auto-run).
     if (!state.player.moving && state.inputHeld && state.lastInputDir != null) {
+      state.autoDir = state.lastInputDir;
       tryMove(state.lastInputDir);
     }
 
@@ -524,6 +563,7 @@ function tick() {
       tryMove(d);
     } else if (now > state.inputBufferUntil) {
       state.inputBufferDir = null;
+    }
     }
 
     // Draw at ~30fps, and go near-idle when nothing changes.
@@ -547,6 +587,7 @@ function bindMazeControls() {
       ev.preventDefault?.();
       state.inputHeld = true;
       state.lastInputDir = dir;
+      state.autoDir = dir;
       tryMove(dir);
       if (typeof ev.pointerId === "number" && el.setPointerCapture) {
         try {

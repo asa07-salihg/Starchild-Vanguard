@@ -165,7 +165,7 @@ function closeModal() {
 }
 
 // ---------------------------
-// Maze generation (DFS backtracker)
+// Maze generation (branchy perfect maze + light braiding)
 // ---------------------------
 
 function makeGrid(rows, cols, fill) {
@@ -176,62 +176,161 @@ function makeGrid(rows, cols, fill) {
   return g;
 }
 
-function carveMaze(rows, cols) {
+const DELTAS = [
+  { d: DIR.N, dr: -1, dc: 0, a: WALL.N, b: WALL.S },
+  { d: DIR.E, dr: 0, dc: 1, a: WALL.E, b: WALL.W },
+  { d: DIR.S, dr: 1, dc: 0, a: WALL.S, b: WALL.N },
+  { d: DIR.W, dr: 0, dc: -1, a: WALL.W, b: WALL.E },
+];
+
+function inBounds(rows, cols, r, c) {
+  return r >= 0 && c >= 0 && r < rows && c < cols;
+}
+
+function knockDownWall(grid, r, c, step) {
+  const nr = r + step.dr;
+  const nc = c + step.dc;
+  if (!inBounds(grid.length, grid[0].length, nr, nc)) return false;
+  grid[r][c] &= ~step.a;
+  grid[nr][nc] &= ~step.b;
+  return true;
+}
+
+// Growing Tree algorithm (mix between DFS and Prim):
+// - Mostly "newest" (DFS-like) => more dead-ends / denser feel.
+// - Sometimes random (Prim-like) => prevents overly long samey corridors.
+function carveMaze(rows, cols, { braid = 0.04, newestBias = 0.75, turnBias = 1.6 } = {}) {
   const grid = makeGrid(rows, cols, WALL.ALL);
   const visited = makeGrid(rows, cols, false);
+  const active = [{ r: 0, c: 0, lastDir: null }];
+  visited[0][0] = true;
 
-  const stack = [];
-  const start = { r: 0, c: 0 };
-  visited[start.r][start.c] = true;
-  stack.push(start);
+  while (active.length) {
+    const useNewest = Math.random() < newestBias;
+    const idx = useNewest ? active.length - 1 : Math.floor(Math.random() * active.length);
+    const cur = active[idx];
 
-  const deltas = [
-    { d: DIR.N, dr: -1, dc: 0, a: WALL.N, b: WALL.S },
-    { d: DIR.E, dr: 0, dc: 1, a: WALL.E, b: WALL.W },
-    { d: DIR.S, dr: 1, dc: 0, a: WALL.S, b: WALL.N },
-    { d: DIR.W, dr: 0, dc: -1, a: WALL.W, b: WALL.E },
-  ];
-
-  while (stack.length) {
-    const cur = stack[stack.length - 1];
     const neighbors = [];
-
-    for (const step of deltas) {
+    for (const step of DELTAS) {
       const nr = cur.r + step.dr;
       const nc = cur.c + step.dc;
-      if (nr < 0 || nc < 0 || nr >= rows || nc >= cols) continue;
+      if (!inBounds(rows, cols, nr, nc)) continue;
       if (visited[nr][nc]) continue;
-      neighbors.push({ nr, nc, step });
+      // Prefer turning (less long straight corridors). lastDir is the direction used to enter this cell.
+      const w = cur.lastDir == null ? 1 : step.d === cur.lastDir ? 1 : turnBias;
+      neighbors.push({ step, w });
     }
 
     if (!neighbors.length) {
-      stack.pop();
+      // Remove this cell from active list
+      active[idx] = active[active.length - 1];
+      active.pop();
       continue;
     }
 
-    const pick = neighbors[Math.floor(Math.random() * neighbors.length)];
-    const { nr, nc, step } = pick;
+    // Weighted pick (turns slightly more likely than going straight).
+    let sum = 0;
+    for (const n of neighbors) sum += n.w;
+    let roll = Math.random() * sum;
+    let pick = neighbors[neighbors.length - 1];
+    for (const n of neighbors) {
+      roll -= n.w;
+      if (roll <= 0) {
+        pick = n;
+        break;
+      }
+    }
 
-    grid[cur.r][cur.c] &= ~step.a;
-    grid[nr][nc] &= ~step.b;
-
+    const step = pick.step;
+    const nr = cur.r + step.dr;
+    const nc = cur.c + step.dc;
+    knockDownWall(grid, cur.r, cur.c, step);
     visited[nr][nc] = true;
-    stack.push({ r: nr, c: nc });
+    active.push({ r: nr, c: nc, lastDir: step.d });
+  }
+
+  // Light "braiding": remove a small fraction of dead-ends to create occasional loops.
+  // Keep it LOW to avoid the "too much empty space / too easy" feel.
+  if (braid > 0) {
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const deg = openingsAtLocal(grid, rows, cols, r, c);
+        if (deg !== 1) continue; // dead end
+        if (Math.random() > braid) continue;
+
+        const closed = [];
+        for (const step of DELTAS) {
+          const nr = r + step.dr;
+          const nc = c + step.dc;
+          if (!inBounds(rows, cols, nr, nc)) continue;
+          if (hasOpeningLocal(grid, r, c, step.d)) continue;
+          closed.push(step);
+        }
+        if (!closed.length) continue;
+        const step = closed[Math.floor(Math.random() * closed.length)];
+        knockDownWall(grid, r, c, step);
+      }
+    }
   }
 
   return grid;
 }
 
-function pickFarExit(rows, cols) {
-  return { r: rows - 1, c: cols - 1 };
+function hasOpeningLocal(grid, r, c, dir) {
+  const w = grid[r][c];
+  if (dir === DIR.N) return (w & WALL.N) === 0;
+  if (dir === DIR.E) return (w & WALL.E) === 0;
+  if (dir === DIR.S) return (w & WALL.S) === 0;
+  if (dir === DIR.W) return (w & WALL.W) === 0;
+  return false;
+}
+
+function openingsAtLocal(grid, rows, cols, r, c) {
+  let count = 0;
+  if (r > 0 && hasOpeningLocal(grid, r, c, DIR.N)) count++;
+  if (c < cols - 1 && hasOpeningLocal(grid, r, c, DIR.E)) count++;
+  if (r < rows - 1 && hasOpeningLocal(grid, r, c, DIR.S)) count++;
+  if (c > 0 && hasOpeningLocal(grid, r, c, DIR.W)) count++;
+  return count;
+}
+
+function pickFarExit(grid) {
+  // BFS from start to find the farthest cell => longer solution path.
+  const rows = grid.length;
+  const cols = grid[0].length;
+  const q = [{ r: 0, c: 0 }];
+  const dist = makeGrid(rows, cols, -1);
+  dist[0][0] = 0;
+  let best = { r: 0, c: 0, d: 0 };
+
+  for (let qi = 0; qi < q.length; qi++) {
+    const cur = q[qi];
+    const d0 = dist[cur.r][cur.c];
+    if (d0 > best.d) best = { r: cur.r, c: cur.c, d: d0 };
+
+    for (const step of DELTAS) {
+      const nr = cur.r + step.dr;
+      const nc = cur.c + step.dc;
+      if (!inBounds(rows, cols, nr, nc)) continue;
+      if (dist[nr][nc] !== -1) continue;
+      if (!hasOpeningLocal(grid, cur.r, cur.c, step.d)) continue;
+      dist[nr][nc] = d0 + 1;
+      q.push({ r: nr, c: nc });
+    }
+  }
+
+  return { r: best.r, c: best.c };
 }
 
 function computeCanvasMetrics() {
   const canvas = els.canvas;
-  const rect = canvas.getBoundingClientRect();
   const dpr = getDpr();
-  const width = Math.max(1, Math.round(rect.width * dpr));
-  const height = Math.max(1, Math.round(rect.height * dpr));
+  // Prefer layout integers from the box model (whole CSS px).
+  // getBoundingClientRect() is fractional and makes backing-store ⇄ display scale drift by subpixels → visible 1px “creep”.
+  const cssW = Math.max(1, canvas.clientWidth);
+  const cssH = Math.max(1, canvas.clientHeight);
+  const width = Math.max(1, Math.round(cssW * dpr));
+  const height = Math.max(1, Math.round(cssH * dpr));
 
   // Ignore tiny size fluctuations (mobile URL bar / viewport micro-resizes)
   if (
@@ -315,20 +414,35 @@ function rebuildStaticLayer() {
 }
 
 function cellCenter(r, c) {
-  const x = state.pad.x + c * state.cell + state.cell / 2;
-  const y = state.pad.y + r * state.cell + state.cell / 2;
+  // Whole-pixel centers only: keeps targets stable at rest.
+  const x = Math.round(state.pad.x + c * state.cell + state.cell * 0.5);
+  const y = Math.round(state.pad.y + r * state.cell + state.cell * 0.5);
   return { x, y };
+}
+
+function appendTrailAt(x, y) {
+  const last = state.trail[state.trail.length - 1];
+  if (last && last.x === x && last.y === y) return;
+  state.trail.push({ x, y, t: performance.now() });
+  // Keep a long persistent trail, but cap for performance.
+  if (state.trail.length > 2200) state.trail.splice(0, state.trail.length - 2200);
 }
 
 function startMaze({ difficulty = "hard" } = {}) {
   // mobile-first sizes (portrait): wider than tall is rare; keep it challenging
+  // Keep the original grid size (visual scale / feel stays the same).
   const rows = difficulty === "hard" ? 23 : 17;
   const cols = difficulty === "hard" ? 17 : 15;
 
   state.rows = rows;
   state.cols = cols;
-  state.mazeGrid = carveMaze(rows, cols);
-  state.exit = pickFarExit(rows, cols);
+  // Keep braiding low (more dead-ends = harder). Bias toward newest for denser mazes.
+  state.mazeGrid = carveMaze(rows, cols, {
+    braid: difficulty === "hard" ? 0.03 : 0.02,
+    newestBias: difficulty === "hard" ? 0.88 : 0.78,
+    turnBias: difficulty === "hard" ? 1.85 : 1.55,
+  });
+  state.exit = pickFarExit(state.mazeGrid);
 
   state.moves = 0;
 
@@ -407,10 +521,6 @@ function tryMove(dir) {
 
   state.moves++;
 
-  state.trail.push({ x: to.x, y: to.y, t: performance.now() });
-  // Keep a long persistent trail, but cap for performance.
-  if (state.trail.length > 2200) state.trail.splice(0, state.trail.length - 2200);
-
   if (nr === state.exit.r && nc === state.exit.c) {
     openModal(
       {
@@ -474,36 +584,47 @@ function strokeMazeWalls(ctx) {
 function drawTrail(ctx) {
   const dpr = getDpr();
   const count = state.trail.length;
-  if (count < 2) return;
+  if (count < 2 && !state.player.moving) return;
 
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.strokeStyle = rgbaFromVar("--primary-rgb", 0.35);
   ctx.lineWidth = clamp(Math.floor(2.2 * dpr), 2, 4);
-  ctx.shadowBlur = 6 * dpr;
-  ctx.shadowColor = rgbaFromVar("--primary-rgb", 0.18);
+  // No shadow — blur reads as positional shimmer when the canvas is CSS-scaled.
   ctx.beginPath();
   ctx.moveTo(state.trail[0].x, state.trail[0].y);
   for (let i = 1; i < state.trail.length; i++) {
     ctx.lineTo(state.trail[i].x, state.trail[i].y);
   }
+  if (state.player.moving) ctx.lineTo(Math.round(state.player.x), Math.round(state.player.y));
   ctx.stroke();
   ctx.restore();
 }
 
 function drawPlayer(ctx) {
   const dpr = getDpr();
-  const r = state.cell * 0.22;
+  const rRaw = state.cell * 0.22;
+  const r = clamp(Math.round(rRaw), 3, Math.max(4, Math.floor(state.cell / 2) - 1));
+  // When we're extremely close to the target, render on integer pixels to avoid a
+  // visible last-frame "alignment nudge" from subpixel AA differences.
+  const closeToTarget =
+    state.player.moving &&
+    Math.abs(state.player.tx - state.player.x) <= 0.9 &&
+    Math.abs(state.player.ty - state.player.y) <= 0.9;
+  const snapRender = !state.player.moving || closeToTarget;
+  const cx = snapRender ? Math.round(state.player.x) : state.player.x;
+  const cy = snapRender ? Math.round(state.player.y) : state.player.y;
 
   ctx.save();
-  // Pure white player marker
-  ctx.shadowBlur = 10 * dpr;
-  ctx.shadowColor = rgbaFromVar("--primary-rgb", 0.22);
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
-  ctx.arc(state.player.x, state.player.y, r, 0, Math.PI * 2);
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
   ctx.fill();
+  // Thin outline instead of shadow (shadow + CSS scaling exaggerates jitter).
+  ctx.strokeStyle = rgbaFromVar("--primary-rgb", 0.22);
+  ctx.lineWidth = clamp(dpr, 1, 3);
+  ctx.stroke();
 
   ctx.restore();
 }
@@ -518,6 +639,14 @@ function tick() {
     const dt = clamp(t - prev, 0, 40); // ms
     state.lastTickTs = t;
     let arrivedThisFrame = false;
+    let steppedThisFrame = false;
+
+    const stepOnce = (dir) => {
+      if (steppedThisFrame) return;
+      if (state.player.moving) return;
+      tryMove(dir);
+      if (state.player.moving) steppedThisFrame = true;
+    };
 
     // smooth movement
     if (state.player.moving) {
@@ -533,44 +662,46 @@ function tick() {
         state.player.y = state.player.ty;
         state.player.moving = false;
         arrivedThisFrame = true;
+        appendTrailAt(state.player.tx, state.player.ty);
       } else {
         state.player.x += (dx / dist) * stepDist;
         state.player.y += (dy / dist) * stepDist;
       }
     }
 
-    // Avoid starting a new tile-move in the same frame we just snapped.
-    if (!arrivedThisFrame) {
-    // Keep moving until a turn/junction when autoDir is set.
-    if (!state.player.moving && state.autoDir != null) {
-      if (shouldAutoContinue(state.autoDir)) {
-        tryMove(state.autoDir);
-      } else {
-        state.autoDir = null;
+    // Continuation rules:
+    // - Hold-to-move continues automatically only through straight corridors.
+    // - At junctions/corners, we stop (even if the button is still held) until the user turns.
+    if (!state.player.moving) {
+      if (state.autoDir != null) {
+        if (shouldAutoContinue(state.autoDir)) stepOnce(state.autoDir);
+        else state.autoDir = null;
       }
-    }
 
-    // If a direction is held, keep stepping (enables auto-run).
-    if (!state.player.moving && state.inputHeld && state.lastInputDir != null) {
-      state.autoDir = state.lastInputDir;
-      tryMove(state.lastInputDir);
-    }
+      if (!state.player.moving && state.inputHeld && state.lastInputDir != null) {
+        if (shouldAutoContinue(state.lastInputDir)) {
+          state.autoDir = state.lastInputDir;
+          stepOnce(state.lastInputDir);
+        } else {
+          state.autoDir = null;
+        }
+      }
 
-    // Apply buffered direction as soon as we stop moving.
-    if (!state.player.moving && state.inputBufferDir != null && now <= state.inputBufferUntil) {
-      const d = state.inputBufferDir;
-      state.inputBufferDir = null;
-      tryMove(d);
-    } else if (now > state.inputBufferUntil) {
-      state.inputBufferDir = null;
-    }
+      // Apply buffered direction as soon as we stop moving (enables smooth turning).
+      if (!state.player.moving && state.inputBufferDir != null && now <= state.inputBufferUntil) {
+        const d = state.inputBufferDir;
+        state.inputBufferDir = null;
+        stepOnce(d);
+      } else if (now > state.inputBufferUntil) {
+        state.inputBufferDir = null;
+      }
     }
 
     // Draw at ~30fps, and go near-idle when nothing changes.
     const needsAnim = state.player.moving || state.inputHeld;
-    if (state.screen === SCREENS.maze && (needsAnim || now - lastDraw > 250)) {
+    if (state.screen === SCREENS.maze && (arrivedThisFrame || needsAnim || now - lastDraw > 250)) {
       // 60fps while moving, 30fps otherwise
-      const targetFrame = state.player.moving ? 16 : 33;
+      const targetFrame = arrivedThisFrame ? 0 : state.player.moving ? 16 : 33;
       if (now - lastDraw > targetFrame) {
         drawMaze();
         lastDraw = now;
@@ -605,7 +736,8 @@ function bindMazeControls() {
     el.addEventListener("pointerdown", startHold, { passive: false });
     el.addEventListener("pointerup", stopHold, { passive: true });
     el.addEventListener("pointercancel", stopHold, { passive: true });
-    el.addEventListener("pointerleave", stopHold, { passive: true });
+    // Do not stop on pointerleave: on phones the finger often drifts slightly off the
+    // arrow shape while still “holding”, which falsely clears inputHeld and kills auto-run.
 
     // Fallback for older browsers
     el.addEventListener("touchstart", startHold, { passive: false });

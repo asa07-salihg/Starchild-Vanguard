@@ -4,9 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1.3.1">
+    <list default="true" id="238c96a9-d60c-4f7b-8561-dd98f3005204" name="Changes" comment="project v1.4">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/script.js" beforeDir="false" afterPath="$PROJECT_DIR$/script.js" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/style.css" beforeDir="false" afterPath="$PROJECT_DIR$/style.css" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -82,7 +83,8 @@
       <workItem from="1777108713998" duration="224000" />
       <workItem from="1777470866921" duration="1266000" />
       <workItem from="1777569352555" duration="797000" />
-      <workItem from="1777610486697" duration="1289000" />
+      <workItem from="1777610486697" duration="1318000" />
+      <workItem from="1777709202904" duration="300000" />
     </task>
     <task id="LOCAL-00001" summary="project v1">
       <option name="closed" value="true" />
@@ -172,7 +174,15 @@
       <option name="project" value="LOCAL" />
       <updated>1777570031297</updated>
     </task>
-    <option name="localTasksCounter" value="12" />
+    <task id="LOCAL-00012" summary="project v1.4">
+      <option name="closed" value="true" />
+      <created>1777611815560</created>
+      <option name="number" value="00012" />
+      <option name="presentableId" value="LOCAL-00012" />
+      <option name="project" value="LOCAL" />
+      <updated>1777611815560</updated>
+    </task>
+    <option name="localTasksCounter" value="13" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -195,7 +205,8 @@
     <MESSAGE value="project v1.2" />
     <MESSAGE value="project v1.3" />
     <MESSAGE value="project v1.3.1" />
-    <option name="LAST_COMMIT_MESSAGE" value="project v1.3.1" />
+    <MESSAGE value="project v1.4" />
+    <option name="LAST_COMMIT_MESSAGE" value="project v1.4" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

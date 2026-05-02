@@ -68,6 +68,65 @@ const els = {
   modalPrimaryBtn: $("modalPrimaryBtn"),
 };
 
+const mazeHeldKeyCodes = new Set();
+
+/** Keyboard scan order — first pressed among held keys drives movement (deterministic WASD/arrows). */
+const MAZE_KEY_SCAN_ORDER = [
+  "KeyW",
+  "KeyA",
+  "KeyS",
+  "KeyD",
+  "ArrowUp",
+  "ArrowLeft",
+  "ArrowDown",
+  "ArrowRight",
+];
+
+/** @type {Record<string, number>} */
+const MAZE_CODE_TO_DIR = {
+  KeyW: DIR.N,
+  ArrowUp: DIR.N,
+  KeyA: DIR.W,
+  ArrowLeft: DIR.W,
+  KeyS: DIR.S,
+  ArrowDown: DIR.S,
+  KeyD: DIR.E,
+  ArrowRight: DIR.E,
+};
+
+function mazeModalBlocksInput() {
+  return els.modal.classList.contains("modal--open");
+}
+
+function mazeTypingTarget() {
+  const a = document.activeElement;
+  if (!a || !(a instanceof HTMLElement)) return null;
+  if (a.closest?.(".quiz__choices")) return a;
+  const tag = a.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || a.isContentEditable) return a;
+  return null;
+}
+
+function pickKeyboardDirFromMazeKeys() {
+  for (const code of MAZE_KEY_SCAN_ORDER) {
+    if (!mazeHeldKeyCodes.has(code)) continue;
+    const d = MAZE_CODE_TO_DIR[code];
+    if (d === undefined) continue;
+    return d;
+  }
+  return null;
+}
+
+function mazeInputAggregateHeld() {
+  state.inputHeld = state.pointerHeld || mazeHeldKeyCodes.size > 0;
+  if (!state.inputHeld) state.autoDir = null;
+}
+
+function activeHoldDirection() {
+  if (state.pointerHeld && state.pointerDir != null) return state.pointerDir;
+  return pickKeyboardDirFromMazeKeys();
+}
+
 const state = {
   screen: SCREENS.welcome,
 
@@ -88,6 +147,8 @@ const state = {
   staticDirty: true,
   lastInputDir: null,
   inputHeld: false,
+  pointerHeld: false,
+  pointerDir: null,
   inputBufferDir: null,
   inputBufferUntil: 0,
   autoDir: null,
@@ -104,6 +165,16 @@ const state = {
 function showScreen(which) {
   state.screen = which;
   document.body.dataset.screen = which;
+
+  // Drop transient maze input when leaving maze (avoid “ghost” auto-run / stray keys).
+  if (which !== SCREENS.maze) {
+    mazeHeldKeyCodes.clear();
+    state.touchStart = null;
+    state.pointerHeld = false;
+    state.pointerDir = null;
+    mazeInputAggregateHeld();
+  }
+
   for (const id of Object.values(SCREENS)) {
     const el = $(id);
     if (!el) continue;
@@ -533,6 +604,13 @@ function tryMove(dir) {
   }
 }
 
+function mazeSwipeDiscrete(dir) {
+  if (state.screen !== SCREENS.maze) return;
+  // Discrete gesture: avoid stale buffered chaining from corridor runs.
+  state.inputBufferDir = null;
+  tryMove(dir);
+}
+
 function drawMaze() {
   const ctx = els.canvas.getContext("2d");
   if (!ctx) return;
@@ -669,19 +747,26 @@ function tick() {
       }
     }
 
+    if (arrivedThisFrame && !state.player.moving && state.inputHeld) {
+      const hdPause = activeHoldDirection();
+      if (hdPause != null && !shouldAutoContinue(hdPause)) state.inputBufferDir = null;
+    }
+
     // Continuation rules:
     // - Hold-to-move continues automatically only through straight corridors.
     // - At junctions/corners, we stop (even if the button is still held) until the user turns.
     if (!state.player.moving) {
+      const holdDir = activeHoldDirection();
+
       if (state.autoDir != null) {
         if (shouldAutoContinue(state.autoDir)) stepOnce(state.autoDir);
         else state.autoDir = null;
       }
 
-      if (!state.player.moving && state.inputHeld && state.lastInputDir != null) {
-        if (shouldAutoContinue(state.lastInputDir)) {
-          state.autoDir = state.lastInputDir;
-          stepOnce(state.lastInputDir);
+      if (!state.player.moving && state.inputHeld && holdDir != null) {
+        if (shouldAutoContinue(holdDir)) {
+          state.autoDir = holdDir;
+          stepOnce(holdDir);
         } else {
           state.autoDir = null;
         }
@@ -712,14 +797,68 @@ function tick() {
   state.raf = requestAnimationFrame(step);
 }
 
+let mazeKbBound = false;
+let mazeWinPointerBound = false;
+
+function mazeClearPointerHold() {
+  // Must NOT clear keyboard holds — only digitizer/mouse latch on the arrows.
+  if (!state.pointerHeld) return;
+  state.pointerHeld = false;
+  state.pointerDir = null;
+  mazeInputAggregateHeld();
+}
+
+function mazeOnKeyDown(ev) {
+  if (ev.repeat) return;
+  if (state.screen !== SCREENS.maze) return;
+  if (!Object.prototype.hasOwnProperty.call(MAZE_CODE_TO_DIR, ev.code)) return;
+  if (mazeModalBlocksInput()) return;
+  if (mazeTypingTarget()) return;
+
+  ev.preventDefault();
+  // Prefer D-pad when it’s physically held — avoids conflicting “two drivers”.
+  if (state.pointerHeld) return;
+  if (mazeHeldKeyCodes.has(ev.code)) return;
+
+  mazeHeldKeyCodes.add(ev.code);
+  mazeInputAggregateHeld();
+
+  const nh = pickKeyboardDirFromMazeKeys();
+  if (nh == null) return;
+  state.lastInputDir = nh;
+  state.autoDir = nh;
+  tryMove(nh);
+}
+
+function mazeOnKeyUp(ev) {
+  if (state.screen !== SCREENS.maze) return;
+  if (!Object.prototype.hasOwnProperty.call(MAZE_CODE_TO_DIR, ev.code)) return;
+  if (mazeModalBlocksInput()) return;
+
+  mazeHeldKeyCodes.delete(ev.code);
+  mazeInputAggregateHeld();
+
+  if (state.pointerHeld) return;
+
+  const nh = pickKeyboardDirFromMazeKeys();
+  state.lastInputDir = nh == null ? null : nh;
+  state.autoDir = nh == null ? null : nh;
+}
+
 function bindMazeControls() {
-  const bind = (el, dir) => {
+  const hasPointer = typeof window.PointerEvent !== "undefined";
+
+  const bindPad = (el, dir) => {
     const startHold = (ev) => {
       ev.preventDefault?.();
-      state.inputHeld = true;
+      state.pointerHeld = true;
+      state.pointerDir = dir;
+      mazeInputAggregateHeld();
+
       state.lastInputDir = dir;
       state.autoDir = dir;
       tryMove(dir);
+
       if (typeof ev.pointerId === "number" && el.setPointerCapture) {
         try {
           el.setPointerCapture(ev.pointerId);
@@ -729,72 +868,150 @@ function bindMazeControls() {
       }
     };
     const stopHold = () => {
-      state.inputHeld = false;
+      mazeClearPointerHold();
     };
 
-    // Pointer events (best cross-device behavior)
-    el.addEventListener("pointerdown", startHold, { passive: false });
-    el.addEventListener("pointerup", stopHold, { passive: true });
-    el.addEventListener("pointercancel", stopHold, { passive: true });
-    // Do not stop on pointerleave: on phones the finger often drifts slightly off the
-    // arrow shape while still “holding”, which falsely clears inputHeld and kills auto-run.
+    // Pointer-first (covers touch + mouse on modern Chromium without double firing).
+    if (hasPointer) {
+      el.addEventListener("pointerdown", startHold, { passive: false });
+      el.addEventListener("pointerup", stopHold, { passive: true });
+      el.addEventListener("pointercancel", stopHold, { passive: true });
+    } else {
+      el.addEventListener("touchstart", startHold, { passive: false });
+      el.addEventListener("touchend", stopHold, { passive: true });
+      el.addEventListener("touchcancel", stopHold, { passive: true });
+      el.addEventListener("mousedown", startHold);
+      el.addEventListener("mouseup", stopHold);
+    }
+    // Do not stop on pointerleave: drift off the clipped arrow shape shouldn’t kill a hold mid-corridor.
 
-    // Fallback for older browsers
-    el.addEventListener("touchstart", startHold, { passive: false });
-    el.addEventListener("touchend", stopHold, { passive: true });
-    el.addEventListener("touchcancel", stopHold, { passive: true });
-    el.addEventListener("mousedown", startHold);
-    el.addEventListener("mouseup", stopHold);
   };
-  bind(els.btnUp, DIR.N);
-  bind(els.btnRight, DIR.E);
-  bind(els.btnDown, DIR.S);
-  bind(els.btnLeft, DIR.W);
 
-  // Make sure we always stop when the finger/mouse is released anywhere.
-  window.addEventListener("pointerup", () => (state.inputHeld = false), { passive: true });
-  window.addEventListener("pointercancel", () => (state.inputHeld = false), { passive: true });
-  window.addEventListener("touchend", () => (state.inputHeld = false), { passive: true });
-  window.addEventListener("mouseup", () => (state.inputHeld = false), { passive: true });
+  bindPad(els.btnUp, DIR.N);
+  bindPad(els.btnRight, DIR.E);
+  bindPad(els.btnDown, DIR.S);
+  bindPad(els.btnLeft, DIR.W);
 
-  const area = document.querySelector(".maze-frame");
-  if (!area) return;
-  const minDist = 26;
-  const maxOffAxis = 26;
+  if (!mazeWinPointerBound) {
+    mazeWinPointerBound = true;
+    window.addEventListener("pointerup", mazeClearPointerHold, { passive: true });
+    window.addEventListener("pointercancel", mazeClearPointerHold, { passive: true });
+    window.addEventListener("touchend", mazeClearPointerHold, { passive: true });
+    window.addEventListener("mouseup", mazeClearPointerHold, { passive: true });
+  }
 
-  area.addEventListener(
-    "touchstart",
-    (e) => {
-      if (e.touches.length !== 1) return;
-      const t = e.touches[0];
-      state.touchStart = { x: t.clientX, y: t.clientY };
-    },
-    { passive: true },
-  );
+  const mazeSwipeConsumeTarget = (ev) => {
+    const tg = ev.target;
+    if (!(tg instanceof Element)) return true;
+    // Skip interactive/UI controls inside the maze screen.
+    return Boolean(tg.closest?.("button,a,input,textarea,select,[role=\"button\"],label,.dpad-cluster"));
+  };
 
-  area.addEventListener(
-    "touchend",
-    (e) => {
-      const s = state.touchStart;
-      state.touchStart = null;
-      if (!s) return;
-      const t = e.changedTouches[0];
-      if (!t) return;
-      const dx = t.clientX - s.x;
-      const dy = t.clientY - s.y;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-      if (adx < minDist && ady < minDist) return;
-      if (adx > ady) {
-        if (ady > maxOffAxis) return;
-        tryMove(dx > 0 ? DIR.E : DIR.W);
-      } else {
-        if (adx > maxOffAxis) return;
-        tryMove(dy > 0 ? DIR.S : DIR.N);
-      }
-    },
-    { passive: true },
-  );
+  /** @param {{ clientX:number, clientY:number, pointerId?:number }} s */
+  const finishSwipeLikeFrom = (s, end) => {
+    const pid = typeof s.pointerId === "number" ? s.pointerId : undefined;
+    if (pid != null && pid !== end.pointerId) return;
+
+    state.touchStart = null;
+
+    const minDist = 26;
+    const maxOffAxis = 26;
+
+    const dx = end.clientX - s.x;
+    const dy = end.clientY - s.y;
+    const adx = Math.abs(dx);
+    const ady = Math.abs(dy);
+    if (adx < minDist && ady < minDist) return;
+    if (adx > ady) {
+      if (ady > maxOffAxis) return;
+      mazeSwipeDiscrete(dx > 0 ? DIR.E : DIR.W);
+    } else {
+      if (adx > maxOffAxis) return;
+      mazeSwipeDiscrete(dy > 0 ? DIR.S : DIR.N);
+    }
+  };
+
+  const mazeSection = $("screenMaze");
+
+  const screenSwipeUsesPointer = mazeSection instanceof HTMLElement && typeof window.PointerEvent !== "undefined";
+
+  // Full maze screen gestures (anything not on buttons/links/inputs): canvas padding, empty areas, top/bottom blanks.
+  if (mazeSection instanceof HTMLElement && screenSwipeUsesPointer) {
+    mazeSection.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (state.screen !== SCREENS.maze) return;
+        if (e.pointerType === "mouse" && e.buttons !== 1) return;
+        if (mazeSwipeConsumeTarget(e)) return;
+        try {
+          e.preventDefault(); // cooperate with CSS touch-action:none
+        } catch {
+          // ignore
+        }
+
+        try {
+          mazeSection.setPointerCapture(e.pointerId);
+        } catch {
+          // ignore
+        }
+
+        state.touchStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+      },
+      { capture: true, passive: false },
+    );
+
+    mazeSection.addEventListener(
+      "pointerup",
+      (e) => {
+        const s = state.touchStart;
+        if (!s) return;
+        finishSwipeLikeFrom(s, { clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId });
+      },
+      { passive: true },
+    );
+
+    mazeSection.addEventListener(
+      "pointercancel",
+      () => {
+        state.touchStart = null;
+      },
+      { passive: true },
+    );
+  } else if (mazeSection instanceof HTMLElement) {
+    // Legacy touch-only fallback across the entire maze screen when PointerEvents are unavailable.
+    mazeSection.addEventListener(
+      "touchstart",
+      (e) => {
+        if (state.screen !== SCREENS.maze) return;
+        if (!(e.target instanceof Element)) return;
+        // ignore UI controls
+        if (e.target.closest?.("button,a,input,textarea,select,.dpad-cluster")) return;
+        if (e.touches.length !== 1) return;
+        const t = e.touches[0];
+        state.touchStart = { x: t.clientX, y: t.clientY };
+      },
+      { passive: true },
+    );
+
+    mazeSection.addEventListener(
+      "touchend",
+      (e) => {
+        const s = state.touchStart;
+        if (!s) return;
+        const t = e.changedTouches[0];
+        if (!t) return;
+        finishSwipeLikeFrom(s, { clientX: t.clientX, clientY: t.clientY, pointerId: 0 });
+      },
+      { passive: true },
+    );
+  }
+
+  // Keyboard steering (desktop): arrows + WASD.
+  if (!mazeKbBound) {
+    mazeKbBound = true;
+    window.addEventListener("keydown", mazeOnKeyDown, { passive: false });
+    window.addEventListener("keyup", mazeOnKeyUp, { passive: true });
+  }
 }
 
 // ---------------------------

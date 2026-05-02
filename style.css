@@ -181,6 +181,9 @@ body[data-screen="screenWin"] .themebar{display:none}
   gap:12px;
   width:100%;
   padding-bottom:calc(8px + var(--safe-bottom));
+  /* Full-screen swipe gestures: don't steal scroll gestures from the rest of the app */
+  touch-action:none;
+  overscroll-behavior:none;
 }
 
 .card{

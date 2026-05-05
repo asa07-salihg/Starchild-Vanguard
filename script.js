@@ -1177,6 +1177,15 @@ function decodeHtml(str) {
   return el.value;
 }
 
+function shuffleQuizChoices(item) {
+  // Ensure correct answer isn't biased toward a fixed position for built-in questions.
+  const pairs = item.c.map((label, idx) => ({ label, idx }));
+  shuffle(pairs);
+  const choices = pairs.map((p) => p.label);
+  const correct = pairs.findIndex((p) => p.idx === item.a);
+  return { q: item.q, c: choices, a: correct };
+}
+
 async function getTriviaToken() {
   if (triviaToken) return triviaToken;
   try {
@@ -1278,7 +1287,9 @@ function startQuiz() {
     topUpTriviaCache(800);
   }
 
-  state.quizQueue = picked.length ? picked : shuffle([...TRIVIA_BANK]).slice(0, 10);
+  const baseQueue = picked.length ? picked : shuffle([...TRIVIA_BANK]).slice(0, 10);
+  // OpenTDB items are already shuffled in normalizeOpenTdbItem(); built-in bank needs shuffling.
+  state.quizQueue = baseQueue.map((it) => (pool === TRIVIA_BANK ? shuffleQuizChoices(it) : it));
   state.quizIndex = 0;
   state.quizScore = 0;
   state.quizPicked = null;

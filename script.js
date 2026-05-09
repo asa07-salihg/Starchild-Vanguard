@@ -29,7 +29,7 @@ const WALL = {
   ALL: 1 | 2 | 4 | 8,
 };
 
-const DISCORD_INVITE_CODE = "7KqduugrFQ";
+const DISCORD_INVITE_CODE = "F9BzPshVqZ";
 const DISCORD_INVITE_URL = `https://discord.gg/${DISCORD_INVITE_CODE}`;
 
 const THEME_LS_KEY = "sv_theme_v1";

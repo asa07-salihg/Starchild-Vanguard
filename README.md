@@ -1,4 +1,4 @@
-# Starchild Vanguard — Club Invite (Maze + Trivia)
+# Starchild Vanguard Club Invite (Maze + Trivia)
 
 - https://asa07-salihg.github.io/Starchild-Vanguard/
 

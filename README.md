@@ -1,77 +1,74 @@
-# Starchild Vanguard — Club Invite (Maze + Trivia)
+# Starchild Vanguard · Club Invite
 
-- https://asa07-salihg.github.io/Starchild-Vanguard/
+Live: https://asa07-salihg.github.io/Starchild-Vanguard/
 
-Mobile-first static site for GitHub Pages:
-- **Dynamic Maze** (procedurally generated every run)
-- **Trivia Mode** (film category, easy, non-repeating, large pool)
-- **Reward/Pass screen** (screenshot to claim stickers)
-- **Discord join CTA**
-- **Theme picker** (bottom bar, saved on device)
+A small mobile-first site for the Starchild Vanguard club. Visitors earn a
+"special pass" (and two stickers) by beating one of two challenges:
 
-## Live requirements
-- Static hosting only (HTML/CSS/Vanilla JS)
-- Designed for **portrait mobile** (iPhone/Android)
+- **Maze** - a new maze is generated every time. Reach the green ring.
+- **Film trivia** - 10 easy questions, 5 correct answers to pass.
 
-## Project structure
-```
-.
-├─ index.html
-├─ style.css
-├─ script.js
-└─ img/
-   └─ logo.png
-```
+The pass shows how it was earned and when it was issued, so a club manager
+can check a screenshot at a glance.
 
-## Local run
-From the project root:
+It is plain HTML, CSS and JavaScript with no build step, so it runs on
+GitHub Pages as is.
+
+## Controls
+
+| | Phone | Keyboard |
+|---|---|---|
+| Move one cell | Tap an arrow | Arrow keys or WASD |
+| Run down a corridor | Hold an arrow, or swipe anywhere on the maze screen | Hold the key |
+| New maze | **New** button | `N` |
+| Pick an answer | Tap it | `1`-`4` or `A`-`D` |
+| Check / next question | Button | `Enter` |
+
+Holding a direction keeps moving through straight corridors and stops at the
+next corner or junction, so you never overshoot a turn.
+
+## Running locally
+
+Any static server works. From the project folder:
 
 ```bash
 python -m http.server 5173
 ```
 
-Open:
-- `http://localhost:5173`
+Then open http://localhost:5173.
 
-## Deploy to GitHub Pages
-1. Push this repository to GitHub.
-2. Go to **Settings → Pages**.
-3. Under **Build and deployment**:
-   - **Source**: *Deploy from a branch*
-   - **Branch**: `main` (or `master`)
-   - **Folder**: `/ (root)`
-4. Save. GitHub will publish a URL in the Pages section.
+## Project layout
 
-## Customization
+```
+index.html   markup for all screens
+style.css    styles and the four colour themes
+script.js    maze, trivia, pass and theme logic
+img/logo.png club logo (also used as favicon and link preview)
+```
 
-### Discord invite code
-Update in `script.js`:
-- `DISCORD_INVITE_CODE`
+## Customising
 
-And (optional) update the link text in `index.html` if you want different button labels.
+**Discord invite** - the link appears twice in `index.html` (welcome screen
+and pass screen). Search for `discord.gg`.
 
-### Theme picker (site color)
-Users can change the accent color from the bottom theme bar. The choice is stored in localStorage.
+**Themes** - colours live in `style.css` under `:root[data-theme="..."]`.
+To add one, add a block there, a `.swatch[data-theme="..."]` rule, a swatch
+button in `index.html`, and the name to `THEMES` in `script.js`.
 
-To change available themes, edit in `script.js`:
-- `THEMES`
-- localStorage key: `sv_theme_v1`
+**Maze size and difficulty** - `MAZE` at the top of `script.js`
+(`rows`, `cols`, how branchy it is, movement speed).
 
-### Trivia behavior
-Trivia is fetched from Open Trivia DB (**Film** category, **easy**, multiple-choice).
+**Quiz length and pass mark** - `QUIZ` in `script.js`.
 
-Key points:
-- **Large pool**: the app keeps topping up an in-memory cache (default target: `800`).
-- **No repeats**: used questions are tracked and persisted in localStorage.
-- **Filters**: actor/cast style questions are filtered out to keep it accessible.
+**Questions** - the game pulls easy film questions from
+[Open Trivia DB](https://opentdb.com) in the background and filters out
+actor, release-year and other niche questions. If the API is slow or
+offline, it uses the built-in `QUESTION_BANK` in `script.js`. Each device
+remembers which questions it has already seen and only repeats them once
+everything has been played.
 
-To tweak, see in `script.js`:
-- `topUpTriviaCache(target = 800)`
-- `looksTooHard(question)` (filters)
-- localStorage key: `sv_trivia_used_v1`
+## Deploying
 
-## Notes
-- Trivia questions are cached and **won’t repeat** thanks to localStorage tracking.
-- If the trivia API is temporarily unavailable, the app falls back to the built-in question set.
-
-#
+1. Push to GitHub.
+2. **Settings → Pages → Build and deployment**: deploy from branch `main`,
+   folder `/ (root)`.

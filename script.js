@@ -1,1477 +1,1387 @@
-/* Starchild Vanguard Invite: Dynamic Maze + Trivia */
+/*
+ * Starchild Vanguard - club invite
+ *
+ * Two ways to earn the pass: clear a freshly generated maze, or score at
+ * least 5/10 on a short film quiz. Everything runs client side so the site
+ * can live on GitHub Pages.
+ */
+(() => {
+  "use strict";
 
-const $ = (id) => document.getElementById(id);
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
 
-const SCREENS = {
-  welcome: "screenWelcome",
-  maze: "screenMaze",
-  quiz: "screenQuiz",
-  win: "screenWin",
-};
-
-const DIR = {
-  N: 0,
-  E: 1,
-  S: 2,
-  W: 3,
-};
-
-function oppositeDir(d) {
-  return (d + 2) % 4;
-}
-
-// bitmask walls (N=1, E=2, S=4, W=8) => 2D array as requested
-const WALL = {
-  N: 1,
-  E: 2,
-  S: 4,
-  W: 8,
-  ALL: 1 | 2 | 4 | 8,
-};
-
-const DISCORD_INVITE_CODE = "7KqduugrFQ";
-const DISCORD_INVITE_URL = `https://discord.gg/${DISCORD_INVITE_CODE}`;
-
-const THEME_LS_KEY = "sv_theme_v1";
-const THEMES = {
-  cyan: { primary: "#19d8f6", primary2: "#67ecff", primaryRgb: "25,216,246", primary2Rgb: "103,236,255", focus: "rgba(25,216,246,.35)" },
-  purple: { primary: "#8b5cf6", primary2: "#c4b5fd", primaryRgb: "139,92,246", primary2Rgb: "196,181,253", focus: "rgba(139,92,246,.35)" },
-  green: { primary: "#37f0b1", primary2: "#a7f3d0", primaryRgb: "55,240,177", primary2Rgb: "167,243,208", focus: "rgba(55,240,177,.30)" },
-  amber: { primary: "#ffd26a", primary2: "#ffe7a3", primaryRgb: "255,210,106", primary2Rgb: "255,231,163", focus: "rgba(255,210,106,.30)" },
-};
-
-const els = {
-  playAgainBtn: $("playAgainBtn"),
-
-  startMazeBtn: $("startMazeBtn"),
-  startQuizBtn: $("startQuizBtn"),
-
-  canvas: $("mazeCanvas"),
-  newMazeBtn: $("newMazeBtn"),
-  homeFromMazeBtn: $("homeFromMazeBtn"),
-
-  btnUp: $("btnUp"),
-  btnDown: $("btnDown"),
-  btnLeft: $("btnLeft"),
-  btnRight: $("btnRight"),
-
-  quizMeta: $("quizMeta"),
-  quizQuestion: $("quizQuestion"),
-  quizChoices: $("quizChoices"),
-  quizNote: $("quizNote"),
-  quizNextBtn: $("quizNextBtn"),
-  homeFromQuizBtn: $("homeFromQuizBtn"),
-
-  modal: $("modal"),
-  modalTitle: $("modalTitle"),
-  modalText: $("modalText"),
-  modalPrimaryBtn: $("modalPrimaryBtn"),
-};
-
-const mazeHeldKeyCodes = new Set();
-
-/** Keyboard scan order — first pressed among held keys drives movement (deterministic WASD/arrows). */
-const MAZE_KEY_SCAN_ORDER = [
-  "KeyW",
-  "KeyA",
-  "KeyS",
-  "KeyD",
-  "ArrowUp",
-  "ArrowLeft",
-  "ArrowDown",
-  "ArrowRight",
-];
-
-/** @type {Record<string, number>} */
-const MAZE_CODE_TO_DIR = {
-  KeyW: DIR.N,
-  ArrowUp: DIR.N,
-  KeyA: DIR.W,
-  ArrowLeft: DIR.W,
-  KeyS: DIR.S,
-  ArrowDown: DIR.S,
-  KeyD: DIR.E,
-  ArrowRight: DIR.E,
-};
-
-function mazeModalBlocksInput() {
-  return els.modal.classList.contains("modal--open");
-}
-
-function mazeTypingTarget() {
-  const a = document.activeElement;
-  if (!a || !(a instanceof HTMLElement)) return null;
-  if (a.closest?.(".quiz__choices")) return a;
-  const tag = a.tagName;
-  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || a.isContentEditable) return a;
-  return null;
-}
-
-function pickKeyboardDirFromMazeKeys() {
-  for (const code of MAZE_KEY_SCAN_ORDER) {
-    if (!mazeHeldKeyCodes.has(code)) continue;
-    const d = MAZE_CODE_TO_DIR[code];
-    if (d === undefined) continue;
-    return d;
-  }
-  return null;
-}
-
-function mazeInputAggregateHeld() {
-  state.inputHeld = state.pointerHeld || mazeHeldKeyCodes.size > 0;
-  if (!state.inputHeld) state.autoDir = null;
-}
-
-function activeHoldDirection() {
-  if (state.pointerHeld && state.pointerDir != null) return state.pointerDir;
-  return pickKeyboardDirFromMazeKeys();
-}
-
-const state = {
-  screen: SCREENS.welcome,
-
-  // Maze
-  mazeGrid: [], // 2D array of wall bitmasks
-  rows: 0,
-  cols: 0,
-  cell: 16,
-  pad: { x: 16, y: 16 },
-  player: { r: 0, c: 0, x: 0, y: 0, tx: 0, ty: 0, moving: false },
-  exit: { r: 0, c: 0 },
-  moves: 0,
-  trail: [],
-  touchStart: null,
-  raf: 0,
-  canvasPx: { w: 0, h: 0 },
-  staticLayer: null,
-  staticDirty: true,
-  lastInputDir: null,
-  inputHeld: false,
-  pointerHeld: false,
-  pointerDir: null,
-  inputBufferDir: null,
-  inputBufferUntil: 0,
-  autoDir: null,
-  lastTickTs: 0,
-
-  // Quiz
-  quizQueue: [],
-  quizIndex: 0,
-  quizScore: 0,
-  quizPicked: null,
-  quizLocked: false,
-};
-
-function showScreen(which) {
-  state.screen = which;
-  document.body.dataset.screen = which;
-
-  // Drop transient maze input when leaving maze (avoid “ghost” auto-run / stray keys).
-  if (which !== SCREENS.maze) {
-    mazeHeldKeyCodes.clear();
-    state.touchStart = null;
-    state.pointerHeld = false;
-    state.pointerDir = null;
-    mazeInputAggregateHeld();
-  }
-
-  for (const id of Object.values(SCREENS)) {
-    const el = $(id);
-    if (!el) continue;
-    el.classList.toggle("screen--active", id === which);
-  }
-}
-
-function randInt(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-function getDpr() {
-  // Cap DPR for performance on mobile (prevents huge canvases)
-  return Math.min(window.devicePixelRatio || 1, 2);
-}
-
-function shuffle(arr) {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
-function clamp(n, min, max) {
-  return Math.max(min, Math.min(max, n));
-}
-
-function cssVar(name, fallback = "") {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
-
-function rgbaFromVar(varName, a) {
-  const rgb = cssVar(varName, "25,216,246");
-  return `rgba(${rgb},${a})`;
-}
-
-function openModal({ title, text, primary }, onPrimary) {
-  els.modalTitle.textContent = title;
-  els.modalText.textContent = text;
-  els.modal.classList.add("modal--open");
-  els.modal.setAttribute("aria-hidden", "false");
-  document.body.dataset.modal = "open";
-
-  const handler = () => {
-    els.modalPrimaryBtn.removeEventListener("click", handler);
-    closeModal();
-    onPrimary?.();
+  const MAZE = {
+    rows: 23,
+    cols: 17,
+    braid: 0.03, // share of dead ends that get opened into loops
+    newestBias: 0.88, // growing-tree: higher = longer, twistier corridors
+    turnBias: 1.85, // weight for turning vs. carrying straight on
+    cellsPerSecond: 13,
+    inputBufferMs: 180,
+    swipeDistance: 26,
   };
-  els.modalPrimaryBtn.textContent = primary || "Continue";
-  els.modalPrimaryBtn.addEventListener("click", handler);
-}
 
-function closeModal() {
-  els.modal.classList.remove("modal--open");
-  els.modal.setAttribute("aria-hidden", "true");
-  delete document.body.dataset.modal;
-}
+  const QUIZ = {
+    length: 10,
+    passScore: 5,
+  };
 
-// ---------------------------
-// Maze generation (branchy perfect maze + light braiding)
-// ---------------------------
+  const TRIVIA_API = {
+    base: "https://opentdb.com",
+    category: 11, // Entertainment: Film
+    difficulty: "easy",
+    batchSize: 50,
+    cacheTarget: 150,
+    requestGapMs: 5500, // OpenTDB allows one request per IP every 5 seconds
+    timeoutMs: 8000,
+  };
 
-function makeGrid(rows, cols, fill) {
-  const g = new Array(rows);
-  for (let r = 0; r < rows; r++) {
-    g[r] = new Array(cols).fill(fill);
+  const STORAGE = {
+    theme: "sv_theme_v1",
+    seenQuestions: "sv_trivia_seen_v2",
+    legacySeenQuestions: "sv_trivia_used_v1",
+  };
+
+  const THEMES = ["cyan", "purple", "green", "amber"];
+  const DEFAULT_THEME = "cyan";
+  const SEEN_LIMIT = 2000;
+  const TRAIL_LIMIT = 2000;
+
+  // Directions are indexes into WALL and STEP.
+  const N = 0;
+  const E = 1;
+  const S = 2;
+  const W = 3;
+  const WALL = [1, 2, 4, 8];
+  const ALL_WALLS = 15;
+  const STEP = [
+    { dr: -1, dc: 0 },
+    { dr: 0, dc: 1 },
+    { dr: 1, dc: 0 },
+    { dr: 0, dc: -1 },
+  ];
+  const opposite = (dir) => (dir + 2) % 4;
+
+  const KEY_DIRECTIONS = {
+    ArrowUp: N,
+    KeyW: N,
+    ArrowRight: E,
+    KeyD: E,
+    ArrowDown: S,
+    KeyS: S,
+    ArrowLeft: W,
+    KeyA: W,
+  };
+
+  // ---------------------------------------------------------------------------
+  // Built-in question bank: [question, correct answer, three wrong answers].
+  // Used offline and to top up rounds when the API is slow or unavailable.
+  // ---------------------------------------------------------------------------
+
+  const QUESTION_BANK = [
+    ["In The Dark Knight, which city does Batman protect?", "Gotham City", "Metropolis", "Star City", "Central City"],
+    ["Which film is set on the moon Pandora?", "Avatar", "Dune", "Interstellar", "Prometheus"],
+    ["Who directed Inception?", "Christopher Nolan", "Denis Villeneuve", "James Cameron", "David Fincher"],
+    ["What is Neo's real name in The Matrix?", "Thomas Anderson", "John Anderton", "Ethan Hunt", "Jason Bourne"],
+    ["In The Matrix, which pill does Neo take?", "The red pill", "The blue pill", "The green pill", "The white pill"],
+    ["Which film is set on the desert planet Arrakis?", "Dune", "Mad Max: Fury Road", "The Martian", "Star Wars"],
+    ["In Dune, what is the precious resource found on Arrakis?", "Spice", "Vibranium", "Unobtanium", "Kyber crystals"],
+    ["In Avatar, which mineral are the humans mining?", "Unobtanium", "Vibranium", "Kryptonite", "Adamantium"],
+    ["What are the blue natives of Pandora called in Avatar?", "Na'vi", "Fremen", "Ewoks", "Klingons"],
+    ["What is the name of the boxy robot in Interstellar?", "TARS", "K-2SO", "WALL-E", "Baymax"],
+    ["What is Frodo's surname in The Lord of the Rings?", "Baggins", "Brandybuck", "Took", "Gamgee"],
+    ["In The Lord of the Rings, where must the One Ring be destroyed?", "Mount Doom", "Rivendell", "Helm's Deep", "Minas Tirith"],
+    ["Which character calls the Ring \"my precious\"?", "Gollum", "Smaug", "Legolas", "Treebeard"],
+    ["Who tells Luke \"I am your father\" in The Empire Strikes Back?", "Darth Vader", "Obi-Wan Kenobi", "Yoda", "Emperor Palpatine"],
+    ["What weapon do Jedi carry in Star Wars?", "Lightsaber", "Blaster", "Bowcaster", "Vibroblade"],
+    ["What is Han Solo's ship called?", "Millennium Falcon", "Enterprise", "Serenity", "Nostromo"],
+    ["What species is Chewbacca?", "Wookiee", "Ewok", "Jawa", "Hutt"],
+    ["In Alien, what is the name of the crew's ship?", "Nostromo", "Enterprise", "Discovery", "Serenity"],
+    ["Who directed Pulp Fiction?", "Quentin Tarantino", "Martin Scorsese", "Guy Ritchie", "Paul Thomas Anderson"],
+    ["What is Maximus's rank at the start of Gladiator?", "General", "Senator", "Centurion", "Consul"],
+    ["In Gladiator, in which empire is the story set?", "The Roman Empire", "The Ottoman Empire", "The Mongol Empire", "The Persian Empire"],
+    ["Which Pixar film follows a rat who dreams of cooking in Paris?", "Ratatouille", "Up", "Luca", "Coco"],
+    ["What is the name of the rat chef in Ratatouille?", "Remy", "Emile", "Linguini", "Gusteau"],
+    ["Which Spider-Man villain fights with four mechanical arms?", "Doctor Octopus", "Green Goblin", "Sandman", "Electro"],
+    ["What is Spider-Man's real name in the original trilogy?", "Peter Parker", "Bruce Banner", "Wade Wilson", "Clark Kent"],
+    ["What did John Wick do for a living before he retired?", "He was a hitman", "He was a detective", "He was a boxer", "He was a pilot"],
+    ["Which film made the line \"I'll be back\" famous?", "The Terminator", "Predator", "RoboCop", "Total Recall"],
+    ["What was Andy Dufresne's job before prison in The Shawshank Redemption?", "Banker", "Lawyer", "Doctor", "Teacher"],
+    ["What is the first rule of Fight Club?", "You do not talk about Fight Club", "Always fight fair", "No one fights alone", "The winner buys the drinks"],
+    ["What is the name of Captain Jack Sparrow's ship?", "The Black Pearl", "The Flying Dutchman", "Queen Anne's Revenge", "The Jolly Roger"],
+    ["What is the hidden African nation in Black Panther?", "Wakanda", "Genovia", "Zamunda", "Sokovia"],
+    ["What is the name of Thor's hammer?", "Mjolnir", "Gungnir", "Excalibur", "Anduril"],
+    ["What is Captain America's shield mainly made of?", "Vibranium", "Adamantium", "Titanium", "Uru"],
+    ["What powers the arc reactor Tony Stark builds in the first Iron Man?", "A palladium core", "A vibranium core", "The Tesseract", "A kyber crystal"],
+    ["Which superhero is Tony Stark?", "Iron Man", "War Machine", "Ant-Man", "Vision"],
+    ["What is the name of the raccoon in Guardians of the Galaxy?", "Rocket", "Groot", "Drax", "Yondu"],
+    ["In Avengers: Infinity War, how many Infinity Stones are there?", "Six", "Five", "Seven", "Nine"],
+    ["Which villain snaps his fingers in Avengers: Infinity War?", "Thanos", "Loki", "Ultron", "Red Skull"],
+    ["In Avengers: Endgame, how do the heroes travel back in time?", "Through the quantum realm", "With a DeLorean", "Using a TARDIS", "Through a wormhole"],
+    ["What does Bruce Banner turn into when he gets angry?", "The Hulk", "The Thing", "Venom", "Groot"],
+    ["What is Superman's home planet?", "Krypton", "Vulcan", "Tatooine", "Pandora"],
+    ["What is Maverick's real name in Top Gun?", "Pete Mitchell", "Nick Bradshaw", "Tom Kazansky", "Jake Seresin"],
+    ["Which agency does Ethan Hunt work for in Mission: Impossible?", "IMF", "MI6", "CIA", "S.H.I.E.L.D."],
+    ["What is James Bond's code number?", "007", "006", "009", "001"],
+    ["How does James Bond like his martini?", "Shaken, not stirred", "Stirred, not shaken", "On the rocks", "With a twist of lime"],
+    ["Who volunteers as tribute in The Hunger Games?", "Katniss Everdeen", "Tris Prior", "Hermione Granger", "Bella Swan"],
+    ["What is the vampire family's surname in Twilight?", "Cullen", "Volturi", "Salvatore", "Black"],
+    ["In Mad Max: Fury Road, what is Furiosa's truck called?", "The War Rig", "The Interceptor", "The Gigahorse", "The Doof Wagon"],
+    ["In The Prestige, the two rivals are both...", "Magicians", "Boxers", "Pilots", "Surgeons"],
+    ["What is the snowman called in Frozen?", "Olaf", "Sven", "Kristoff", "Marshmallow"],
+    ["Who is Anna's sister in Frozen?", "Elsa", "Rapunzel", "Merida", "Ariel"],
+    ["Which film follows an ogre who lives in a swamp?", "Shrek", "Monsters, Inc.", "Trolls", "Hotel Transylvania"],
+    ["What is the cowboy doll called in Toy Story?", "Woody", "Buzz", "Hamm", "Rex"],
+    ["Which Toy Story character says \"To infinity and beyond!\"?", "Buzz Lightyear", "Woody", "Rex", "Jessie"],
+    ["In the first Toy Story, what is the name of the boy who owns the toys?", "Andy", "Sid", "Bonnie", "Max"],
+    ["What kind of fish is Nemo?", "Clownfish", "Blue tang", "Pufferfish", "Goldfish"],
+    ["What is the name of Nemo's father?", "Marlin", "Gill", "Bruce", "Crush"],
+    ["Who is Simba's father in The Lion King?", "Mufasa", "Scar", "Rafiki", "Zazu"],
+    ["What does \"Hakuna Matata\" mean in The Lion King?", "No worries", "Long live the king", "Welcome home", "Be brave"],
+    ["What is the name of the rooster in Moana?", "Heihei", "Pua", "Pascal", "Abu"],
+    ["What is Jasmine's tiger called in Aladdin?", "Rajah", "Abu", "Iago", "Shere Khan"],
+    ["In Beauty and the Beast, what kind of object is Lumiere?", "A candelabra", "A clock", "A teapot", "A wardrobe"],
+    ["What is the name of Ariel's crab friend in The Little Mermaid?", "Sebastian", "Flounder", "Scuttle", "Sheldon"],
+    ["What does Sulley call the little girl in Monsters, Inc.?", "Boo", "Lulu", "Mimi", "Dot"],
+    ["What lifts Carl's house into the sky in Up?", "Balloons", "A rocket", "A tornado", "A giant bird"],
+    ["What is the talking dog called in Up?", "Dug", "Kevin", "Russell", "Bolt"],
+    ["What is Lightning McQueen's racing number in Cars?", "95", "43", "86", "12"],
+    ["In Coco, what does Miguel dream of becoming?", "A musician", "A chef", "A footballer", "A painter"],
+    ["In Inside Out, which emotion is blue?", "Sadness", "Fear", "Joy", "Disgust"],
+    ["What is the family's surname in The Incredibles?", "Parr", "Parker", "Kent", "Wayne"],
+    ["What is the name of the robot WALL-E falls for?", "EVE", "AUTO", "M-O", "BB-8"],
+    ["What kind of animal is Judy Hopps in Zootopia?", "A rabbit", "A fox", "A sloth", "A sheep"],
+    ["What kind of animal is Alex in Madagascar?", "A lion", "A zebra", "A hippo", "A giraffe"],
+    ["In Kung Fu Panda, which title is Po given?", "The Dragon Warrior", "The Tiger Master", "The Jade Emperor", "The Shadow Warrior"],
+    ["What are Gru's little yellow helpers called?", "Minions", "Smurfs", "Oompa-Loompas", "Gremlins"],
+    ["What is Hiccup's dragon called in How to Train Your Dragon?", "Toothless", "Stormfly", "Hookfang", "Smaug"],
+    ["What is the family's surname in Encanto?", "Madrigal", "Rivera", "Parr", "Pelekai"],
+    ["What sport is played on broomsticks in Harry Potter?", "Quidditch", "Gobstones", "Wizard's chess", "Exploding Snap"],
+    ["What is the name of Harry Potter's owl?", "Hedwig", "Errol", "Crookshanks", "Scabbers"],
+    ["Which house is Harry Potter sorted into?", "Gryffindor", "Slytherin", "Ravenclaw", "Hufflepuff"],
+    ["What shape is the scar on Harry Potter's forehead?", "A lightning bolt", "A star", "A crescent moon", "A cross"],
+    ["Which animals are brought back to life in Jurassic Park?", "Dinosaurs", "Mammoths", "Dragons", "Sabre-toothed cats"],
+    ["On which island is Jurassic Park built?", "Isla Nublar", "Skull Island", "Amity Island", "Craggy Island"],
+    ["What kind of animal terrorizes Amity Island in Jaws?", "A great white shark", "A killer whale", "A giant squid", "A crocodile"],
+    ["What kind of animal is King Kong?", "A giant gorilla", "A giant lizard", "A giant bear", "A giant wolf"],
+    ["Which car becomes a time machine in Back to the Future?", "DeLorean", "Ford Mustang", "Chevrolet Camaro", "Volkswagen Beetle"],
+    ["How fast must the time machine go in Back to the Future?", "88 mph", "66 mph", "99 mph", "121 mph"],
+    ["What does E.T. famously want to do?", "Phone home", "Go to school", "Find his dog", "Build a rocket"],
+    ["In E.T., how do Elliott and E.T. escape the police?", "On flying bicycles", "In a flying car", "By hot-air balloon", "On hoverboards"],
+    ["What is Kevin's surname in Home Alone?", "McCallister", "McFly", "McClane", "McGregor"],
+    ["What color is the road Dorothy follows in The Wizard of Oz?", "Yellow", "Red", "Silver", "Green"],
+    ["In The Wizard of Oz, what does the Scarecrow want?", "A brain", "A heart", "Courage", "A way home"],
+    ["What is Cinderella's lost slipper made of?", "Glass", "Gold", "Silk", "Silver"],
+    ["How many dwarfs does Snow White meet?", "Seven", "Five", "Six", "Nine"],
+    ["What is the name of the hotel in The Shining?", "The Overlook Hotel", "The Bates Motel", "The Grand Budapest Hotel", "Hotel Transylvania"],
+    ["On which planet is Mark Watney stranded in The Martian?", "Mars", "Venus", "Mercury", "Jupiter"],
+    ["What sport is Rocky about?", "Boxing", "Wrestling", "Karate", "Basketball"],
+    ["In The Karate Kid, which chore secretly trains Daniel?", "Waxing cars", "Washing dishes", "Mowing the lawn", "Chopping wood"],
+    ["What does the Titanic hit on its maiden voyage?", "An iceberg", "A reef", "Another ship", "A whale"],
+    ["What is Indiana Jones afraid of?", "Snakes", "Spiders", "Heights", "Rats"],
+    ["What is Indiana Jones's profession?", "Archaeologist", "Astronaut", "Detective", "Journalist"],
+    ["Who leads the Autobots in Transformers?", "Optimus Prime", "Megatron", "Bumblebee", "Starscream"],
+    ["Which rule must the Ghostbusters never break?", "Never cross the streams", "Never say its name", "Never look back", "Never split up"],
+    ["In Gremlins, when must you never feed a Mogwai?", "After midnight", "Before sunrise", "At noon", "On a full moon"],
+    ["In the original 1995 Jumanji, what is Jumanji?", "A board game", "A video game", "A card game", "A pinball machine"],
+    ["What does Charlie find in his chocolate bar in Charlie and the Chocolate Factory?", "A golden ticket", "A silver coin", "A treasure map", "A secret recipe"],
+    ["How does Mary Poppins arrive at the Banks house?", "Floating down with an umbrella", "On a broomstick", "On a flying carpet", "In a hot-air balloon"],
+    ["Which family sings together in The Sound of Music?", "The von Trapps", "The Partridges", "The Addams", "The Banks"],
+    ["In Forrest Gump, life is like a box of...", "Chocolates", "Crayons", "Cereal", "Surprises"],
+    ["What is the family's surname in The Godfather?", "Corleone", "Soprano", "Montana", "Rizzo"],
+    ["In Mean Girls, what color do they wear on Wednesdays?", "Pink", "Black", "White", "Blue"],
+  ].map(([question, answer, ...wrong]) => ({ id: questionId(question), question, answer, wrong }));
+
+  // ---------------------------------------------------------------------------
+  // DOM
+  // ---------------------------------------------------------------------------
+
+  const $ = (id) => document.getElementById(id);
+
+  const ui = {
+    app: $("app"),
+    themebar: $("themebar"),
+    swatches: [...document.querySelectorAll(".swatch")],
+    screens: {
+      welcome: $("screenWelcome"),
+      maze: $("screenMaze"),
+      quiz: $("screenQuiz"),
+      win: $("screenWin"),
+    },
+
+    startMazeBtn: $("startMazeBtn"),
+    startQuizBtn: $("startQuizBtn"),
+    playAgainBtn: $("playAgainBtn"),
+
+    canvas: $("mazeCanvas"),
+    mazeMoves: $("mazeMoves"),
+    mazeTime: $("mazeTime"),
+    newMazeBtn: $("newMazeBtn"),
+    homeFromMazeBtn: $("homeFromMazeBtn"),
+    pads: [
+      [$("btnUp"), N],
+      [$("btnRight"), E],
+      [$("btnDown"), S],
+      [$("btnLeft"), W],
+    ],
+
+    quizCount: $("quizCount"),
+    quizBar: $("quizBar"),
+    quizQuestion: $("quizQuestion"),
+    quizChoices: $("quizChoices"),
+    quizNote: $("quizNote"),
+    quizNextBtn: $("quizNextBtn"),
+    homeFromQuizBtn: $("homeFromQuizBtn"),
+
+    passMode: $("passMode"),
+    passResult: $("passResult"),
+    passIssued: $("passIssued"),
+
+    modal: $("modal"),
+    modalBackdrop: $("modalBackdrop"),
+    modalTitle: $("modalTitle"),
+    modalText: $("modalText"),
+    modalActionBtn: $("modalActionBtn"),
+  };
+
+  // ---------------------------------------------------------------------------
+  // Small helpers
+  // ---------------------------------------------------------------------------
+
+  function shuffle(list) {
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    return list;
   }
-  return g;
-}
 
-const DELTAS = [
-  { d: DIR.N, dr: -1, dc: 0, a: WALL.N, b: WALL.S },
-  { d: DIR.E, dr: 0, dc: 1, a: WALL.E, b: WALL.W },
-  { d: DIR.S, dr: 1, dc: 0, a: WALL.S, b: WALL.N },
-  { d: DIR.W, dr: 0, dc: -1, a: WALL.W, b: WALL.E },
-];
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function inBounds(rows, cols, r, c) {
-  return r >= 0 && c >= 0 && r < rows && c < cols;
-}
+  function formatDuration(ms) {
+    const total = Math.floor(ms / 1000);
+    const minutes = Math.floor(total / 60);
+    const seconds = String(total % 60).padStart(2, "0");
+    return `${minutes}:${seconds}`;
+  }
 
-function knockDownWall(grid, r, c, step) {
-  const nr = r + step.dr;
-  const nc = c + step.dc;
-  if (!inBounds(grid.length, grid[0].length, nr, nc)) return false;
-  grid[r][c] &= ~step.a;
-  grid[nr][nc] &= ~step.b;
-  return true;
-}
+  function questionId(text) {
+    return text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  }
 
-// Growing Tree algorithm (mix between DFS and Prim):
-// - Mostly "newest" (DFS-like) => more dead-ends / denser feel.
-// - Sometimes random (Prim-like) => prevents overly long samey corridors.
-function carveMaze(rows, cols, { braid = 0.04, newestBias = 0.75, turnBias = 1.6 } = {}) {
-  const grid = makeGrid(rows, cols, WALL.ALL);
-  const visited = makeGrid(rows, cols, false);
-  const active = [{ r: 0, c: 0, lastDir: null }];
-  visited[0][0] = true;
-
-  while (active.length) {
-    const useNewest = Math.random() < newestBias;
-    const idx = useNewest ? active.length - 1 : Math.floor(Math.random() * active.length);
-    const cur = active[idx];
-
-    const neighbors = [];
-    for (const step of DELTAS) {
-      const nr = cur.r + step.dr;
-      const nc = cur.c + step.dc;
-      if (!inBounds(rows, cols, nr, nc)) continue;
-      if (visited[nr][nc]) continue;
-      // Prefer turning (less long straight corridors). lastDir is the direction used to enter this cell.
-      const w = cur.lastDir == null ? 1 : step.d === cur.lastDir ? 1 : turnBias;
-      neighbors.push({ step, w });
-    }
-
-    if (!neighbors.length) {
-      // Remove this cell from active list
-      active[idx] = active[active.length - 1];
-      active.pop();
-      continue;
-    }
-
-    // Weighted pick (turns slightly more likely than going straight).
-    let sum = 0;
-    for (const n of neighbors) sum += n.w;
-    let roll = Math.random() * sum;
-    let pick = neighbors[neighbors.length - 1];
-    for (const n of neighbors) {
-      roll -= n.w;
-      if (roll <= 0) {
-        pick = n;
-        break;
+  // localStorage can throw (private mode, blocked cookies, full quota).
+  // Losing a preference is fine; crashing the page is not.
+  const storage = {
+    get(key) {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
       }
+    },
+    set(key, value) {
+      try {
+        localStorage.setItem(key, value);
+      } catch {
+        /* not critical */
+      }
+    },
+    remove(key) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* not critical */
+      }
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Screens
+  // ---------------------------------------------------------------------------
+
+  let currentScreen = "welcome";
+
+  function showScreen(name) {
+    const previous = currentScreen;
+    currentScreen = name;
+    document.body.dataset.screen = name;
+
+    for (const [key, el] of Object.entries(ui.screens)) {
+      el.classList.toggle("screen--active", key === name);
     }
 
-    const step = pick.step;
-    const nr = cur.r + step.dr;
-    const nc = cur.c + step.dc;
-    knockDownWall(grid, cur.r, cur.c, step);
-    visited[nr][nc] = true;
-    active.push({ r: nr, c: nc, lastDir: step.d });
+    if (previous === "maze" && name !== "maze") stopMazeLoop();
+
+    // Move focus into the new screen so keyboard and screen reader users
+    // are not left on a button that just disappeared.
+    ui.screens[name].focus({ preventScroll: true });
   }
 
-  // Light "braiding": remove a small fraction of dead-ends to create occasional loops.
-  // Keep it LOW to avoid the "too much empty space / too easy" feel.
-  if (braid > 0) {
+  // ---------------------------------------------------------------------------
+  // Modal
+  // ---------------------------------------------------------------------------
+
+  const modal = {
+    onAction: null,
+    dismissible: false,
+    returnFocus: null,
+
+    get isOpen() {
+      return !ui.modal.hidden;
+    },
+
+    open({ title, text, actionLabel = "Continue", dismissible = false, onAction = null }) {
+      this.onAction = onAction;
+      this.dismissible = dismissible;
+      this.returnFocus = document.activeElement;
+
+      ui.modalTitle.textContent = title;
+      ui.modalText.textContent = text;
+      ui.modalActionBtn.textContent = actionLabel;
+
+      ui.modal.hidden = false;
+      ui.app.inert = true;
+      ui.themebar.inert = true;
+      document.body.dataset.modal = "open";
+
+      releaseMazeInput();
+      ui.modalActionBtn.focus({ preventScroll: true });
+    },
+
+    close() {
+      if (!this.isOpen) return;
+      ui.modal.hidden = true;
+      ui.app.inert = false;
+      ui.themebar.inert = false;
+      delete document.body.dataset.modal;
+
+      const target = this.returnFocus;
+      this.returnFocus = null;
+      this.onAction = null;
+      if (target instanceof HTMLElement && target.isConnected) target.focus({ preventScroll: true });
+    },
+
+    confirm() {
+      const action = this.onAction;
+      this.close();
+      action?.();
+    },
+
+    handleKey(event) {
+      if (event.key === "Escape" && this.dismissible) {
+        event.preventDefault();
+        this.close();
+      } else if (event.key === "Tab") {
+        // There is only one control in the dialog, so keep focus on it.
+        event.preventDefault();
+        ui.modalActionBtn.focus();
+      }
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // Maze generation
+  // ---------------------------------------------------------------------------
+
+  const inBounds = (rows, cols, r, c) => r >= 0 && c >= 0 && r < rows && c < cols;
+  const isOpenIn = (grid, r, c, dir) => (grid[r][c] & WALL[dir]) === 0;
+
+  function openWall(grid, r, c, dir) {
+    const { dr, dc } = STEP[dir];
+    grid[r][c] &= ~WALL[dir];
+    grid[r + dr][c + dc] &= ~WALL[opposite(dir)];
+  }
+
+  function countOpenings(grid, r, c) {
+    let count = 0;
+    for (let dir = 0; dir < 4; dir++) if (isOpenIn(grid, r, c, dir)) count++;
+    return count;
+  }
+
+  /**
+   * Growing-tree maze. Picking the newest cell most of the time gives the long,
+   * winding corridors of a depth-first maze; picking a random cell now and then
+   * breaks those up with extra branches. The result is a perfect maze, which is
+   * then lightly braided so a few dead ends become loops.
+   */
+  function generateMaze(rows, cols, { braid, newestBias, turnBias }) {
+    const grid = Array.from({ length: rows }, () => new Array(cols).fill(ALL_WALLS));
+    const visited = Array.from({ length: rows }, () => new Array(cols).fill(false));
+    const active = [{ r: 0, c: 0, cameFrom: null }];
+    visited[0][0] = true;
+
+    while (active.length) {
+      const index = Math.random() < newestBias ? active.length - 1 : Math.floor(Math.random() * active.length);
+      const cell = active[index];
+
+      const options = [];
+      let totalWeight = 0;
+      for (let dir = 0; dir < 4; dir++) {
+        const r = cell.r + STEP[dir].dr;
+        const c = cell.c + STEP[dir].dc;
+        if (!inBounds(rows, cols, r, c) || visited[r][c]) continue;
+        const weight = cell.cameFrom === null || dir === cell.cameFrom ? 1 : turnBias;
+        options.push({ dir, weight });
+        totalWeight += weight;
+      }
+
+      if (!options.length) {
+        active[index] = active[active.length - 1];
+        active.pop();
+        continue;
+      }
+
+      let roll = Math.random() * totalWeight;
+      let choice = options[options.length - 1];
+      for (const option of options) {
+        roll -= option.weight;
+        if (roll <= 0) {
+          choice = option;
+          break;
+        }
+      }
+
+      openWall(grid, cell.r, cell.c, choice.dir);
+      const r = cell.r + STEP[choice.dir].dr;
+      const c = cell.c + STEP[choice.dir].dc;
+      visited[r][c] = true;
+      active.push({ r, c, cameFrom: choice.dir });
+    }
+
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const deg = openingsAtLocal(grid, rows, cols, r, c);
-        if (deg !== 1) continue; // dead end
-        if (Math.random() > braid) continue;
-
+        if (countOpenings(grid, r, c) !== 1 || Math.random() > braid) continue;
         const closed = [];
-        for (const step of DELTAS) {
-          const nr = r + step.dr;
-          const nc = c + step.dc;
-          if (!inBounds(rows, cols, nr, nc)) continue;
-          if (hasOpeningLocal(grid, r, c, step.d)) continue;
-          closed.push(step);
+        for (let dir = 0; dir < 4; dir++) {
+          if (inBounds(rows, cols, r + STEP[dir].dr, c + STEP[dir].dc) && !isOpenIn(grid, r, c, dir)) {
+            closed.push(dir);
+          }
         }
-        if (!closed.length) continue;
-        const step = closed[Math.floor(Math.random() * closed.length)];
-        knockDownWall(grid, r, c, step);
+        if (closed.length) openWall(grid, r, c, closed[Math.floor(Math.random() * closed.length)]);
+      }
+    }
+
+    return grid;
+  }
+
+  /** Breadth-first search from the start; the farthest cell becomes the exit. */
+  function findFarthestCell(grid) {
+    const rows = grid.length;
+    const cols = grid[0].length;
+    const distance = Array.from({ length: rows }, () => new Array(cols).fill(-1));
+    const queue = [{ r: 0, c: 0 }];
+    distance[0][0] = 0;
+    let farthest = queue[0];
+
+    for (let i = 0; i < queue.length; i++) {
+      const cell = queue[i];
+      if (distance[cell.r][cell.c] > distance[farthest.r][farthest.c]) farthest = cell;
+
+      for (let dir = 0; dir < 4; dir++) {
+        if (!isOpenIn(grid, cell.r, cell.c, dir)) continue;
+        const r = cell.r + STEP[dir].dr;
+        const c = cell.c + STEP[dir].dc;
+        if (!inBounds(rows, cols, r, c) || distance[r][c] !== -1) continue;
+        distance[r][c] = distance[cell.r][cell.c] + 1;
+        queue.push({ r, c });
+      }
+    }
+
+    return farthest;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Maze game
+  // ---------------------------------------------------------------------------
+
+  const maze = {
+    grid: null,
+    rows: MAZE.rows,
+    cols: MAZE.cols,
+    exit: { r: 0, c: 0 },
+    // The player glides from (fromR, fromC) to (r, c); progress runs 0 -> 1.
+    player: { r: 0, c: 0, fromR: 0, fromC: 0, progress: 1 },
+    trail: [],
+    moves: 0,
+    startedAt: 0,
+    finishedIn: 0,
+    solved: false,
+
+    heldKeys: [], // key codes, most recent last
+    pointerDir: null,
+    pointerId: null,
+    runDir: null, // set by swipes: keep going until the corridor ends
+    bufferedDir: null,
+    bufferedUntil: 0,
+
+    metrics: { dpr: 1, cell: 0, x0: 0, y0: 0 },
+    colors: null,
+    staticLayer: null,
+    staticDirty: true,
+    needsDraw: true,
+    raf: 0,
+    lastFrame: 0,
+    hud: { moves: -1, time: "" },
+  };
+
+  const isMoving = () => maze.player.progress < 1;
+  const canOpen = (r, c, dir) => isOpenIn(maze.grid, r, c, dir);
+
+  /** True when the cell is a plain corridor running along `dir` (no side exits). */
+  function isStraightCorridor(r, c, dir) {
+    return canOpen(r, c, dir) && canOpen(r, c, opposite(dir)) && countOpenings(maze.grid, r, c) === 2;
+  }
+
+  function heldDirection() {
+    if (maze.pointerDir !== null) return maze.pointerDir;
+    const last = maze.heldKeys[maze.heldKeys.length - 1];
+    return last === undefined ? null : KEY_DIRECTIONS[last];
+  }
+
+  function releaseMazeInput() {
+    maze.heldKeys.length = 0;
+    maze.runDir = null;
+    maze.bufferedDir = null;
+    releasePad();
+  }
+
+  function releasePad() {
+    maze.pointerDir = null;
+    maze.pointerId = null;
+    for (const [el] of ui.pads) el.classList.remove("is-pressed");
+  }
+
+  function startMaze() {
+    maze.grid = generateMaze(maze.rows, maze.cols, MAZE);
+    maze.exit = findFarthestCell(maze.grid);
+    maze.player = { r: 0, c: 0, fromR: 0, fromC: 0, progress: 1 };
+    maze.trail = [{ r: 0, c: 0 }];
+    maze.moves = 0;
+    maze.startedAt = 0;
+    maze.finishedIn = 0;
+    maze.solved = false;
+    maze.staticDirty = true;
+    maze.needsDraw = true;
+    releaseMazeInput();
+
+    showScreen("maze");
+    resizeCanvas();
+    updateHud();
+    startMazeLoop();
+  }
+
+  function canAcceptInput() {
+    return currentScreen === "maze" && maze.grid && !maze.solved && !modal.isOpen;
+  }
+
+  function tryStep(dir) {
+    if (!canAcceptInput() || isMoving()) return false;
+    const p = maze.player;
+    if (!canOpen(p.r, p.c, dir)) return false;
+
+    p.fromR = p.r;
+    p.fromC = p.c;
+    p.r += STEP[dir].dr;
+    p.c += STEP[dir].dc;
+    p.progress = 0;
+
+    maze.moves++;
+    if (!maze.startedAt) maze.startedAt = performance.now();
+    return true;
+  }
+
+  /** A fresh press from the keyboard, the d-pad or a swipe. */
+  function pressDirection(dir) {
+    if (!canAcceptInput()) return;
+    maze.runDir = null;
+
+    if (isMoving()) {
+      // Remember it briefly so turns chain smoothly off the current step.
+      maze.bufferedDir = dir;
+      maze.bufferedUntil = performance.now() + MAZE.inputBufferMs;
+    } else {
+      tryStep(dir);
+    }
+    startMazeLoop();
+  }
+
+  function swipeDirection(dir) {
+    pressDirection(dir);
+    if (canAcceptInput()) maze.runDir = dir;
+  }
+
+  function onArrive() {
+    const p = maze.player;
+    maze.trail.push({ r: p.r, c: p.c });
+    if (maze.trail.length > TRAIL_LIMIT) maze.trail.splice(0, maze.trail.length - TRAIL_LIMIT);
+
+    if (p.r === maze.exit.r && p.c === maze.exit.c) finishMaze();
+  }
+
+  /** Called whenever the player is standing still: decide whether to move on. */
+  function continueMovement() {
+    const p = maze.player;
+
+    if (maze.bufferedDir !== null) {
+      const dir = maze.bufferedDir;
+      maze.bufferedDir = null;
+      if (performance.now() <= maze.bufferedUntil && tryStep(dir)) return;
+    }
+
+    // Holding a direction keeps you going through straight corridors, then
+    // stops at the next corner or junction so you never overshoot a turn.
+    const held = heldDirection();
+    if (held !== null) {
+      if (isStraightCorridor(p.r, p.c, held)) tryStep(held);
+      return;
+    }
+
+    if (maze.runDir !== null) {
+      if (isStraightCorridor(p.r, p.c, maze.runDir)) tryStep(maze.runDir);
+      else maze.runDir = null;
+    }
+  }
+
+  function finishMaze() {
+    maze.solved = true;
+    maze.finishedIn = performance.now() - maze.startedAt;
+    releaseMazeInput();
+    updateHud();
+
+    const grid = maze.grid;
+    const time = formatDuration(maze.finishedIn);
+    const moves = maze.moves;
+
+    // Short pause so the dot visibly lands on the exit before the dialog.
+    setTimeout(() => {
+      if (currentScreen !== "maze" || maze.grid !== grid) return;
+      modal.open({
+        title: "Maze cleared",
+        text: `${time} and ${moves} moves. Your pass is on the next screen. Screenshot it to claim your stickers.`,
+        actionLabel: "Show pass",
+        onAction: () => showPass("Maze", `${time} · ${moves} moves`),
+      });
+    }, 280);
+  }
+
+  function updateHud() {
+    if (maze.hud.moves !== maze.moves) {
+      maze.hud.moves = maze.moves;
+      ui.mazeMoves.textContent = String(maze.moves);
+    }
+
+    let elapsed = 0;
+    if (maze.solved) elapsed = maze.finishedIn;
+    else if (maze.startedAt) elapsed = performance.now() - maze.startedAt;
+
+    const time = formatDuration(elapsed);
+    if (maze.hud.time !== time) {
+      maze.hud.time = time;
+      ui.mazeTime.textContent = time;
+    }
+  }
+
+  function startMazeLoop() {
+    if (maze.raf || currentScreen !== "maze") return;
+    maze.lastFrame = performance.now();
+    maze.raf = requestAnimationFrame(mazeFrame);
+  }
+
+  function stopMazeLoop() {
+    cancelAnimationFrame(maze.raf);
+    maze.raf = 0;
+    releaseMazeInput();
+  }
+
+  function mazeFrame(now) {
+    maze.raf = 0;
+    if (currentScreen !== "maze" || !maze.grid) return;
+
+    // Clamp so a background tab does not teleport the player on return.
+    const dt = Math.min(Math.max(now - maze.lastFrame, 0), 50);
+    maze.lastFrame = now;
+
+    const p = maze.player;
+    if (isMoving()) {
+      p.progress = Math.min(1, p.progress + (dt * MAZE.cellsPerSecond) / 1000);
+      maze.needsDraw = true;
+      if (!isMoving()) onArrive();
+    }
+    if (!isMoving() && !maze.solved) continueMovement();
+
+    updateHud();
+    if (maze.needsDraw || isMoving()) drawMaze();
+
+    const timerRunning = maze.startedAt && !maze.solved;
+    const busy = isMoving() || maze.bufferedDir !== null || heldDirection() !== null || maze.runDir !== null;
+    if (busy || timerRunning) maze.raf = requestAnimationFrame(mazeFrame);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Maze rendering
+  // ---------------------------------------------------------------------------
+
+  function readThemeColors() {
+    const styles = getComputedStyle(document.documentElement);
+    const read = (name, fallback) => styles.getPropertyValue(name).trim() || fallback;
+    return {
+      primary: read("--primary-rgb", "25, 216, 246"),
+      primary2: read("--primary-2-rgb", "103, 236, 255"),
+      success: read("--success-rgb", "55, 240, 177"),
+    };
+  }
+
+  const rgba = (rgb, alpha) => `rgba(${rgb}, ${alpha})`;
+
+  function resizeCanvas() {
+    const canvas = ui.canvas;
+    const cssWidth = canvas.clientWidth;
+    const cssHeight = canvas.clientHeight;
+    if (!cssWidth || !cssHeight) return;
+
+    // Capped at 2x: sharper than that is invisible on a phone and costs memory.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.round(cssWidth * dpr);
+    const height = Math.round(cssHeight * dpr);
+    const sizeChanged = width !== canvas.width || height !== canvas.height;
+
+    if (sizeChanged) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    const inset = Math.round(10 * dpr);
+    const cell = Math.max(4, Math.floor(Math.min((width - inset * 2) / maze.cols, (height - inset * 2) / maze.rows)));
+    maze.metrics = {
+      dpr,
+      cell,
+      x0: Math.floor((width - cell * maze.cols) / 2),
+      y0: Math.floor((height - cell * maze.rows) / 2),
+    };
+
+    maze.staticDirty = true;
+    // Resizing clears the canvas, so repaint right away instead of flashing blank.
+    if (maze.grid && currentScreen === "maze") drawMaze();
+  }
+
+  const cellX = (c) => maze.metrics.x0 + (c + 0.5) * maze.metrics.cell;
+  const cellY = (r) => maze.metrics.y0 + (r + 0.5) * maze.metrics.cell;
+
+  function traceWalls(ctx) {
+    const { cell, x0, y0 } = maze.metrics;
+    const lastRow = maze.rows - 1;
+    const lastCol = maze.cols - 1;
+
+    ctx.beginPath();
+    for (let r = 0; r < maze.rows; r++) {
+      for (let c = 0; c < maze.cols; c++) {
+        const walls = maze.grid[r][c];
+        const x = x0 + c * cell;
+        const y = y0 + r * cell;
+        if (walls & WALL[N]) {
+          ctx.moveTo(x, y);
+          ctx.lineTo(x + cell, y);
+        }
+        if (walls & WALL[W]) {
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, y + cell);
+        }
+        if (r === lastRow && walls & WALL[S]) {
+          ctx.moveTo(x, y + cell);
+          ctx.lineTo(x + cell, y + cell);
+        }
+        if (c === lastCol && walls & WALL[E]) {
+          ctx.moveTo(x + cell, y);
+          ctx.lineTo(x + cell, y + cell);
+        }
       }
     }
   }
 
-  return grid;
-}
-
-function hasOpeningLocal(grid, r, c, dir) {
-  const w = grid[r][c];
-  if (dir === DIR.N) return (w & WALL.N) === 0;
-  if (dir === DIR.E) return (w & WALL.E) === 0;
-  if (dir === DIR.S) return (w & WALL.S) === 0;
-  if (dir === DIR.W) return (w & WALL.W) === 0;
-  return false;
-}
-
-function openingsAtLocal(grid, rows, cols, r, c) {
-  let count = 0;
-  if (r > 0 && hasOpeningLocal(grid, r, c, DIR.N)) count++;
-  if (c < cols - 1 && hasOpeningLocal(grid, r, c, DIR.E)) count++;
-  if (r < rows - 1 && hasOpeningLocal(grid, r, c, DIR.S)) count++;
-  if (c > 0 && hasOpeningLocal(grid, r, c, DIR.W)) count++;
-  return count;
-}
-
-function pickFarExit(grid) {
-  // BFS from start to find the farthest cell => longer solution path.
-  const rows = grid.length;
-  const cols = grid[0].length;
-  const q = [{ r: 0, c: 0 }];
-  const dist = makeGrid(rows, cols, -1);
-  dist[0][0] = 0;
-  let best = { r: 0, c: 0, d: 0 };
-
-  for (let qi = 0; qi < q.length; qi++) {
-    const cur = q[qi];
-    const d0 = dist[cur.r][cur.c];
-    if (d0 > best.d) best = { r: cur.r, c: cur.c, d: d0 };
-
-    for (const step of DELTAS) {
-      const nr = cur.r + step.dr;
-      const nc = cur.c + step.dc;
-      if (!inBounds(rows, cols, nr, nc)) continue;
-      if (dist[nr][nc] !== -1) continue;
-      if (!hasOpeningLocal(grid, cur.r, cur.c, step.d)) continue;
-      dist[nr][nc] = d0 + 1;
-      q.push({ r: nr, c: nc });
+  function buildStaticLayer() {
+    const { width, height } = ui.canvas;
+    const layer = maze.staticLayer || document.createElement("canvas");
+    if (layer.width !== width || layer.height !== height) {
+      layer.width = width;
+      layer.height = height;
     }
+
+    const ctx = layer.getContext("2d");
+    const { dpr, cell } = maze.metrics;
+    const colors = readThemeColors();
+    const wall = 2 * Math.round(1.2 * dpr);
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // Soft glow underneath, then the crisp wall on top.
+    ctx.save();
+    ctx.strokeStyle = rgba(colors.primary, 0.22);
+    ctx.lineWidth = wall + 4;
+    ctx.shadowBlur = 14 * dpr;
+    ctx.shadowColor = rgba(colors.primary, 0.18);
+    traceWalls(ctx);
+    ctx.stroke();
+    ctx.restore();
+
+    ctx.strokeStyle = rgba(colors.primary2, 0.95);
+    ctx.lineWidth = wall;
+    traceWalls(ctx);
+    ctx.stroke();
+
+    // Start and exit markers.
+    ctx.lineWidth = Math.max(1, Math.round(1.5 * dpr));
+    ctx.strokeStyle = rgba(colors.primary2, 0.28);
+    ctx.beginPath();
+    ctx.arc(cellX(0), cellY(0), cell * 0.3, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.lineWidth = 2 * dpr;
+    ctx.fillStyle = rgba(colors.success, 0.18);
+    ctx.strokeStyle = rgba(colors.success, 0.75);
+    ctx.beginPath();
+    ctx.arc(cellX(maze.exit.c), cellY(maze.exit.r), cell * 0.32, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    maze.staticLayer = layer;
+    maze.colors = colors;
+    maze.staticDirty = false;
   }
 
-  return { r: best.r, c: best.c };
-}
-
-function computeCanvasMetrics() {
-  const canvas = els.canvas;
-  const dpr = getDpr();
-  // Prefer layout integers from the box model (whole CSS px).
-  // getBoundingClientRect() is fractional and makes backing-store ⇄ display scale drift by subpixels → visible 1px “creep”.
-  const cssW = Math.max(1, canvas.clientWidth);
-  const cssH = Math.max(1, canvas.clientHeight);
-  const width = Math.max(1, Math.round(cssW * dpr));
-  const height = Math.max(1, Math.round(cssH * dpr));
-
-  // Ignore tiny size fluctuations (mobile URL bar / viewport micro-resizes)
-  if (
-    state.canvasPx.w &&
-    state.canvasPx.h &&
-    Math.abs(width - state.canvasPx.w) < Math.max(2, Math.round(2 * dpr)) &&
-    Math.abs(height - state.canvasPx.h) < Math.max(2, Math.round(2 * dpr))
-  ) {
-    return;
+  function playerPosition() {
+    const p = maze.player;
+    const t = p.progress;
+    return {
+      x: cellX(p.fromC + (p.c - p.fromC) * t),
+      y: cellY(p.fromR + (p.r - p.fromR) * t),
+    };
   }
 
-  canvas.width = width;
-  canvas.height = height;
-  state.canvasPx.w = width;
-  state.canvasPx.h = height;
-  state.staticDirty = true;
+  function drawMaze() {
+    const canvas = ui.canvas;
+    const ctx = canvas.getContext("2d");
+    if (!ctx || !maze.grid || !maze.metrics.cell) return;
 
-  const outerPad = Math.floor(14 * dpr);
-  const cell = Math.floor(Math.min((width - outerPad * 2) / state.cols, (height - outerPad * 2) / state.rows));
-  state.cell = clamp(cell, Math.floor(10 * dpr), Math.floor(28 * dpr));
+    if (maze.staticDirty) buildStaticLayer();
+    maze.needsDraw = false;
 
-  // Center the maze inside the canvas
-  const mazeW = state.cols * state.cell;
-  const mazeH = state.rows * state.cell;
-  state.pad = {
-    x: Math.floor((width - mazeW) / 2),
-    y: Math.floor((height - mazeH) / 2),
-  };
-}
+    const { dpr, cell } = maze.metrics;
+    const colors = maze.colors;
+    const pos = playerPosition();
 
-function rebuildStaticLayer() {
-  if (!state.staticDirty) return;
-  if (!state.rows || !state.cols) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(maze.staticLayer, 0, 0);
 
-  const main = els.canvas;
-  const w = main.width;
-  const h = main.height;
-  if (!w || !h) return;
+    // Trail: every cell visited, plus the segment currently being travelled.
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = rgba(colors.primary, 0.38);
+    ctx.lineWidth = clamp(Math.round(2.2 * dpr), 2, 4);
+    ctx.beginPath();
+    ctx.moveTo(cellX(maze.trail[0].c), cellY(maze.trail[0].r));
+    for (let i = 1; i < maze.trail.length; i++) {
+      ctx.lineTo(cellX(maze.trail[i].c), cellY(maze.trail[i].r));
+    }
+    if (isMoving()) ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+    ctx.restore();
 
-  const off = document.createElement("canvas");
-  off.width = w;
-  off.height = h;
-  const ctx = off.getContext("2d");
-  if (!ctx) return;
+    // Player dot. At rest it snaps to whole pixels so it looks sharp.
+    const radius = clamp(Math.round(cell * 0.22), 3, Math.max(4, Math.floor(cell / 2) - 1));
+    const x = isMoving() ? pos.x : Math.round(pos.x);
+    const y = isMoving() ? pos.y : Math.round(pos.y);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = rgba(colors.primary, 0.3);
+    ctx.lineWidth = clamp(dpr, 1, 3);
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
 
-  const dpr = getDpr();
-  const wall = clamp(Math.floor(2.4 * dpr), 2, 5);
+  // ---------------------------------------------------------------------------
+  // Maze input
+  // ---------------------------------------------------------------------------
 
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = rgbaFromVar("--primary-rgb", 0.22);
-  ctx.lineWidth = wall + 4;
-  ctx.shadowBlur = 14 * dpr;
-  ctx.shadowColor = rgbaFromVar("--primary-rgb", 0.18);
-  strokeMazeWalls(ctx);
-  ctx.restore();
+  function bindMazeControls() {
+    for (const [el, dir] of ui.pads) {
+      el.addEventListener("pointerdown", (event) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return;
+        event.preventDefault();
+        try {
+          el.setPointerCapture(event.pointerId);
+        } catch {
+          /* capture is a nice-to-have */
+        }
+        releasePad();
+        maze.pointerDir = dir;
+        maze.pointerId = event.pointerId;
+        el.classList.add("is-pressed");
+        pressDirection(dir);
+      });
 
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = rgbaFromVar("--primary2-rgb", 0.95);
-  ctx.lineWidth = wall;
-  ctx.shadowBlur = 0;
-  strokeMazeWalls(ctx);
-  ctx.restore();
+      const release = (event) => {
+        if (event.pointerId === maze.pointerId) releasePad();
+      };
+      el.addEventListener("pointerup", release);
+      el.addEventListener("pointercancel", release);
+      el.addEventListener("lostpointercapture", release);
 
-  const ex = cellCenter(state.exit.r, state.exit.c);
-  ctx.save();
-  ctx.fillStyle = rgbaFromVar("--success-rgb", 0.16);
-  ctx.strokeStyle = rgbaFromVar("--success-rgb", 0.55);
-  ctx.lineWidth = 2 * dpr;
-  ctx.beginPath();
-  ctx.arc(ex.x, ex.y, state.cell * 0.32, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
+      // Enter / Space on a focused arrow (detail is 0 for keyboard clicks).
+      el.addEventListener("click", (event) => {
+        if (event.detail === 0) pressDirection(dir);
+      });
 
-  state.staticLayer = off;
-  state.staticDirty = false;
-}
+      el.addEventListener("contextmenu", (event) => event.preventDefault());
+    }
 
-function cellCenter(r, c) {
-  // Whole-pixel centers only: keeps targets stable at rest.
-  const x = Math.round(state.pad.x + c * state.cell + state.cell * 0.5);
-  const y = Math.round(state.pad.y + r * state.cell + state.cell * 0.5);
-  return { x, y };
-}
+    // Drag anywhere on the maze screen to steer. Each time the finger travels
+    // far enough, that counts as a swipe and the anchor moves with it, so one
+    // continuous drag can take several turns.
+    const section = ui.screens.maze;
+    let swipe = null;
 
-function appendTrailAt(x, y) {
-  const last = state.trail[state.trail.length - 1];
-  if (last && last.x === x && last.y === y) return;
-  state.trail.push({ x, y, t: performance.now() });
-  // Keep a long persistent trail, but cap for performance.
-  if (state.trail.length > 2200) state.trail.splice(0, state.trail.length - 2200);
-}
-
-function startMaze({ difficulty = "hard" } = {}) {
-  // mobile-first sizes (portrait): wider than tall is rare; keep it challenging
-  // Keep the original grid size (visual scale / feel stays the same).
-  const rows = difficulty === "hard" ? 23 : 17;
-  const cols = difficulty === "hard" ? 17 : 15;
-
-  state.rows = rows;
-  state.cols = cols;
-  // Keep braiding low (more dead-ends = harder). Bias toward newest for denser mazes.
-  state.mazeGrid = carveMaze(rows, cols, {
-    braid: difficulty === "hard" ? 0.03 : 0.02,
-    newestBias: difficulty === "hard" ? 0.88 : 0.78,
-    turnBias: difficulty === "hard" ? 1.85 : 1.55,
-  });
-  state.exit = pickFarExit(state.mazeGrid);
-
-  state.moves = 0;
-
-  showScreen(SCREENS.maze);
-
-  // Canvas size is 0 when the screen is hidden; measure after layout.
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      computeCanvasMetrics();
-      const p0 = cellCenter(0, 0);
-      state.player = { r: 0, c: 0, x: p0.x, y: p0.y, tx: p0.x, ty: p0.y, moving: false };
-      state.trail = [{ x: p0.x, y: p0.y, t: performance.now() }];
-      state.staticDirty = true;
-      rebuildStaticLayer();
-      tick();
+    section.addEventListener("pointerdown", (event) => {
+      if (event.target instanceof Element && event.target.closest("button, a")) return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      swipe = { id: event.pointerId, x: event.clientX, y: event.clientY };
     });
-  });
-}
 
-function canStep(r, c, dir) {
-  const w = state.mazeGrid[r][c];
-  if (dir === DIR.N) return (w & WALL.N) === 0;
-  if (dir === DIR.E) return (w & WALL.E) === 0;
-  if (dir === DIR.S) return (w & WALL.S) === 0;
-  if (dir === DIR.W) return (w & WALL.W) === 0;
-  return false;
-}
+    section.addEventListener("pointermove", (event) => {
+      if (!swipe || event.pointerId !== swipe.id) return;
+      const dx = event.clientX - swipe.x;
+      const dy = event.clientY - swipe.y;
+      const ax = Math.abs(dx);
+      const ay = Math.abs(dy);
+      if (Math.max(ax, ay) < MAZE.swipeDistance) return;
+      if (Math.min(ax, ay) > Math.max(ax, ay) * 0.75) return; // too diagonal to call
 
-function openingsAt(r, c) {
-  let count = 0;
-  if (canStep(r, c, DIR.N)) count++;
-  if (canStep(r, c, DIR.E)) count++;
-  if (canStep(r, c, DIR.S)) count++;
-  if (canStep(r, c, DIR.W)) count++;
-  return count;
-}
+      swipeDirection(ax > ay ? (dx > 0 ? E : W) : dy > 0 ? S : N);
+      swipe.x = event.clientX;
+      swipe.y = event.clientY;
+    });
 
-function shouldAutoContinue(dir) {
-  // Continue only through straight corridors: exactly 2 exits (forward + back).
-  const r = state.player.r;
-  const c = state.player.c;
-  if (!canStep(r, c, dir)) return false;
-  const deg = openingsAt(r, c);
-  if (deg !== 2) return false;
-  if (!canStep(r, c, oppositeDir(dir))) return false;
-  return true;
-}
-
-function tryMove(dir) {
-  if (state.screen !== SCREENS.maze) return;
-  if (state.player.moving) {
-    // Buffer the next direction briefly for smoother chaining.
-    state.inputBufferDir = dir;
-    state.inputBufferUntil = performance.now() + 180;
-    return;
-  }
-
-  const { r, c } = state.player;
-  if (!canStep(r, c, dir)) return;
-
-  let nr = r;
-  let nc = c;
-  if (dir === DIR.N) nr--;
-  if (dir === DIR.E) nc++;
-  if (dir === DIR.S) nr++;
-  if (dir === DIR.W) nc--;
-
-  if (nr < 0 || nc < 0 || nr >= state.rows || nc >= state.cols) return;
-
-  const to = cellCenter(nr, nc);
-  state.player.tx = to.x;
-  state.player.ty = to.y;
-  state.player.moving = true;
-  state.player.r = nr;
-  state.player.c = nc;
-
-  state.moves++;
-
-  if (nr === state.exit.r && nc === state.exit.c) {
-    openModal(
-      {
-        title: "Completed.",
-        text: "Screenshot the pass on the next screen to claim your stickers.",
-        primary: "Show Pass",
-      },
-      () => showScreen(SCREENS.win),
-    );
-  }
-}
-
-function mazeSwipeDiscrete(dir) {
-  if (state.screen !== SCREENS.maze) return;
-  // Discrete gesture: avoid stale buffered chaining from corridor runs.
-  state.inputBufferDir = null;
-  tryMove(dir);
-}
-
-function drawMaze() {
-  const ctx = els.canvas.getContext("2d");
-  if (!ctx) return;
-
-  rebuildStaticLayer();
-  ctx.clearRect(0, 0, els.canvas.width, els.canvas.height);
-  if (state.staticLayer) ctx.drawImage(state.staticLayer, 0, 0);
-
-  // trail
-  drawTrail(ctx);
-
-  // player
-  drawPlayer(ctx);
-}
-
-function strokeMazeWalls(ctx) {
-  const x0 = state.pad.x;
-  const y0 = state.pad.y;
-  const cell = state.cell;
-
-  ctx.beginPath();
-  for (let r = 0; r < state.rows; r++) {
-    for (let c = 0; c < state.cols; c++) {
-      const w = state.mazeGrid[r][c];
-      const x = x0 + c * cell;
-      const y = y0 + r * cell;
-      if (w & WALL.N) {
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + cell, y);
-      }
-      if (w & WALL.W) {
-        ctx.moveTo(x, y);
-        ctx.lineTo(x, y + cell);
-      }
-      // draw outer borders on last row/col via S/E walls
-      if (r === state.rows - 1 && (w & WALL.S)) {
-        ctx.moveTo(x, y + cell);
-        ctx.lineTo(x + cell, y + cell);
-      }
-      if (c === state.cols - 1 && (w & WALL.E)) {
-        ctx.moveTo(x + cell, y);
-        ctx.lineTo(x + cell, y + cell);
-      }
-    }
-  }
-  ctx.stroke();
-}
-
-function drawTrail(ctx) {
-  const dpr = getDpr();
-  const count = state.trail.length;
-  if (count < 2 && !state.player.moving) return;
-
-  ctx.save();
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.strokeStyle = rgbaFromVar("--primary-rgb", 0.35);
-  ctx.lineWidth = clamp(Math.floor(2.2 * dpr), 2, 4);
-  // No shadow — blur reads as positional shimmer when the canvas is CSS-scaled.
-  ctx.beginPath();
-  ctx.moveTo(state.trail[0].x, state.trail[0].y);
-  for (let i = 1; i < state.trail.length; i++) {
-    ctx.lineTo(state.trail[i].x, state.trail[i].y);
-  }
-  if (state.player.moving) ctx.lineTo(Math.round(state.player.x), Math.round(state.player.y));
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawPlayer(ctx) {
-  const dpr = getDpr();
-  const rRaw = state.cell * 0.22;
-  const r = clamp(Math.round(rRaw), 3, Math.max(4, Math.floor(state.cell / 2) - 1));
-  // When we're extremely close to the target, render on integer pixels to avoid a
-  // visible last-frame "alignment nudge" from subpixel AA differences.
-  const closeToTarget =
-    state.player.moving &&
-    Math.abs(state.player.tx - state.player.x) <= 0.9 &&
-    Math.abs(state.player.ty - state.player.y) <= 0.9;
-  const snapRender = !state.player.moving || closeToTarget;
-  const cx = snapRender ? Math.round(state.player.x) : state.player.x;
-  const cy = snapRender ? Math.round(state.player.y) : state.player.y;
-
-  ctx.save();
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fill();
-  // Thin outline instead of shadow (shadow + CSS scaling exaggerates jitter).
-  ctx.strokeStyle = rgbaFromVar("--primary-rgb", 0.22);
-  ctx.lineWidth = clamp(dpr, 1, 3);
-  ctx.stroke();
-
-  ctx.restore();
-}
-
-function tick() {
-  cancelAnimationFrame(state.raf);
-  let lastDraw = 0;
-  const step = (ts) => {
-    const now = performance.now();
-    const t = ts ?? now;
-    const prev = state.lastTickTs || t;
-    const dt = clamp(t - prev, 0, 40); // ms
-    state.lastTickTs = t;
-    let arrivedThisFrame = false;
-    let steppedThisFrame = false;
-
-    const stepOnce = (dir) => {
-      if (steppedThisFrame) return;
-      if (state.player.moving) return;
-      tryMove(dir);
-      if (state.player.moving) steppedThisFrame = true;
+    const endSwipe = (event) => {
+      if (swipe && event.pointerId === swipe.id) swipe = null;
     };
+    section.addEventListener("pointerup", endSwipe);
+    section.addEventListener("pointercancel", endSwipe);
 
-    // smooth movement
-    if (state.player.moving) {
-      const dx = state.player.tx - state.player.x;
-      const dy = state.player.ty - state.player.y;
-      const dist = Math.hypot(dx, dy);
-      // Time-based speed (px/sec) for consistent feel across devices.
-      const pxPerSec = Math.max(220, state.cell * 14);
-      const stepDist = (pxPerSec * dt) / 1000;
+    new ResizeObserver(() => resizeCanvas()).observe(ui.canvas);
+  }
 
-      if (dist <= stepDist) {
-        state.player.x = state.player.tx;
-        state.player.y = state.player.ty;
-        state.player.moving = false;
-        arrivedThisFrame = true;
-        appendTrailAt(state.player.tx, state.player.ty);
-      } else {
-        state.player.x += (dx / dist) * stepDist;
-        state.player.y += (dy / dist) * stepDist;
-      }
+  function handleMazeKeyDown(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    if (event.code === "KeyN" && !event.repeat) {
+      startMaze();
+      return;
     }
 
-    if (arrivedThisFrame && !state.player.moving && state.inputHeld) {
-      const hdPause = activeHoldDirection();
-      if (hdPause != null && !shouldAutoContinue(hdPause)) state.inputBufferDir = null;
-    }
+    const dir = KEY_DIRECTIONS[event.code];
+    if (dir === undefined) return;
+    event.preventDefault();
+    if (event.repeat) return;
 
-    // Continuation rules:
-    // - Hold-to-move continues automatically only through straight corridors.
-    // - At junctions/corners, we stop (even if the button is still held) until the user turns.
-    if (!state.player.moving) {
-      const holdDir = activeHoldDirection();
+    const held = maze.heldKeys;
+    const existing = held.indexOf(event.code);
+    if (existing !== -1) held.splice(existing, 1);
+    held.push(event.code);
+    pressDirection(dir);
+  }
 
-      if (state.autoDir != null) {
-        if (shouldAutoContinue(state.autoDir)) stepOnce(state.autoDir);
-        else state.autoDir = null;
-      }
+  function handleKeyUp(event) {
+    const index = maze.heldKeys.indexOf(event.code);
+    if (index !== -1) maze.heldKeys.splice(index, 1);
+  }
 
-      if (!state.player.moving && state.inputHeld && holdDir != null) {
-        if (shouldAutoContinue(holdDir)) {
-          state.autoDir = holdDir;
-          stepOnce(holdDir);
-        } else {
-          state.autoDir = null;
-        }
-      }
+  // ---------------------------------------------------------------------------
+  // Trivia source (Open Trivia DB, with the built-in bank as backup)
+  // ---------------------------------------------------------------------------
 
-      // Apply buffered direction as soon as we stop moving (enables smooth turning).
-      if (!state.player.moving && state.inputBufferDir != null && now <= state.inputBufferUntil) {
-        const d = state.inputBufferDir;
-        state.inputBufferDir = null;
-        stepOnce(d);
-      } else if (now > state.inputBufferUntil) {
-        state.inputBufferDir = null;
-      }
-    }
+  const NICHE_PATTERNS = [
+    /\b(actor|actress|cast|portray(s|ed)?|played by|plays|played|voiced?|voice actor)\b/i,
+    /\b(direct(or|ed)|composer|composed|screenplay|release[ds]?|year|academy award|oscars?|box office|budget|imdb|episode|roman numeral)\b/i,
+  ];
 
-    // Draw at ~30fps, and go near-idle when nothing changes.
-    const needsAnim = state.player.moving || state.inputHeld;
-    if (state.screen === SCREENS.maze && (arrivedThisFrame || needsAnim || now - lastDraw > 250)) {
-      // 60fps while moving, 30fps otherwise
-      const targetFrame = arrivedThisFrame ? 0 : state.player.moving ? 16 : 33;
-      if (now - lastDraw > targetFrame) {
-        drawMaze();
-        lastDraw = now;
-      }
-    }
-    state.raf = requestAnimationFrame(step);
-  };
-  state.raf = requestAnimationFrame(step);
-}
+  function isGoodFit(item) {
+    if (item.question.length > 100) return false;
+    if (![item.answer, ...item.wrong].every((text) => text.length <= 40)) return false;
+    if (NICHE_PATTERNS.some((pattern) => pattern.test(item.question))) return false;
+    return /\b(which|who|what)\b/i.test(item.question);
+  }
 
-let mazeKbBound = false;
-let mazeWinPointerBound = false;
+  const entityParser = new DOMParser();
+  function decodeEntities(text) {
+    return entityParser.parseFromString(text, "text/html").documentElement.textContent.trim();
+  }
 
-function mazeClearPointerHold() {
-  // Must NOT clear keyboard holds — only digitizer/mouse latch on the arrows.
-  if (!state.pointerHeld) return;
-  state.pointerHeld = false;
-  state.pointerDir = null;
-  mazeInputAggregateHeld();
-}
-
-function mazeOnKeyDown(ev) {
-  if (ev.repeat) return;
-  if (state.screen !== SCREENS.maze) return;
-  if (!Object.prototype.hasOwnProperty.call(MAZE_CODE_TO_DIR, ev.code)) return;
-  if (mazeModalBlocksInput()) return;
-  if (mazeTypingTarget()) return;
-
-  ev.preventDefault();
-  // Prefer D-pad when it’s physically held — avoids conflicting “two drivers”.
-  if (state.pointerHeld) return;
-  if (mazeHeldKeyCodes.has(ev.code)) return;
-
-  mazeHeldKeyCodes.add(ev.code);
-  mazeInputAggregateHeld();
-
-  const nh = pickKeyboardDirFromMazeKeys();
-  if (nh == null) return;
-  state.lastInputDir = nh;
-  state.autoDir = nh;
-  tryMove(nh);
-}
-
-function mazeOnKeyUp(ev) {
-  if (state.screen !== SCREENS.maze) return;
-  if (!Object.prototype.hasOwnProperty.call(MAZE_CODE_TO_DIR, ev.code)) return;
-  if (mazeModalBlocksInput()) return;
-
-  mazeHeldKeyCodes.delete(ev.code);
-  mazeInputAggregateHeld();
-
-  if (state.pointerHeld) return;
-
-  const nh = pickKeyboardDirFromMazeKeys();
-  state.lastInputDir = nh == null ? null : nh;
-  state.autoDir = nh == null ? null : nh;
-}
-
-function bindMazeControls() {
-  const hasPointer = typeof window.PointerEvent !== "undefined";
-
-  const bindPad = (el, dir) => {
-    const startHold = (ev) => {
-      ev.preventDefault?.();
-      state.pointerHeld = true;
-      state.pointerDir = dir;
-      mazeInputAggregateHeld();
-
-      state.lastInputDir = dir;
-      state.autoDir = dir;
-      tryMove(dir);
-
-      if (typeof ev.pointerId === "number" && el.setPointerCapture) {
-        try {
-          el.setPointerCapture(ev.pointerId);
-        } catch {
-          // ignore
-        }
-      }
+  function fromApi(raw) {
+    const question = decodeEntities(raw.question);
+    return {
+      id: questionId(question),
+      question,
+      answer: decodeEntities(raw.correct_answer),
+      wrong: raw.incorrect_answers.map(decodeEntities),
     };
-    const stopHold = () => {
-      mazeClearPointerHold();
-    };
-
-    // Pointer-first (covers touch + mouse on modern Chromium without double firing).
-    if (hasPointer) {
-      el.addEventListener("pointerdown", startHold, { passive: false });
-      el.addEventListener("pointerup", stopHold, { passive: true });
-      el.addEventListener("pointercancel", stopHold, { passive: true });
-    } else {
-      el.addEventListener("touchstart", startHold, { passive: false });
-      el.addEventListener("touchend", stopHold, { passive: true });
-      el.addEventListener("touchcancel", stopHold, { passive: true });
-      el.addEventListener("mousedown", startHold);
-      el.addEventListener("mouseup", stopHold);
-    }
-    // Do not stop on pointerleave: drift off the clipped arrow shape shouldn’t kill a hold mid-corridor.
-
-  };
-
-  bindPad(els.btnUp, DIR.N);
-  bindPad(els.btnRight, DIR.E);
-  bindPad(els.btnDown, DIR.S);
-  bindPad(els.btnLeft, DIR.W);
-
-  if (!mazeWinPointerBound) {
-    mazeWinPointerBound = true;
-    window.addEventListener("pointerup", mazeClearPointerHold, { passive: true });
-    window.addEventListener("pointercancel", mazeClearPointerHold, { passive: true });
-    window.addEventListener("touchend", mazeClearPointerHold, { passive: true });
-    window.addEventListener("mouseup", mazeClearPointerHold, { passive: true });
   }
 
-  const mazeSwipeConsumeTarget = (ev) => {
-    const tg = ev.target;
-    if (!(tg instanceof Element)) return true;
-    // Skip interactive/UI controls inside the maze screen.
-    return Boolean(tg.closest?.("button,a,input,textarea,select,[role=\"button\"],label,.dpad-cluster"));
-  };
-
-  /** @param {{ clientX:number, clientY:number, pointerId?:number }} s */
-  const finishSwipeLikeFrom = (s, end) => {
-    const pid = typeof s.pointerId === "number" ? s.pointerId : undefined;
-    if (pid != null && pid !== end.pointerId) return;
-
-    state.touchStart = null;
-
-    const minDist = 26;
-    const maxOffAxis = 26;
-
-    const dx = end.clientX - s.x;
-    const dy = end.clientY - s.y;
-    const adx = Math.abs(dx);
-    const ady = Math.abs(dy);
-    if (adx < minDist && ady < minDist) return;
-    if (adx > ady) {
-      if (ady > maxOffAxis) return;
-      mazeSwipeDiscrete(dx > 0 ? DIR.E : DIR.W);
-    } else {
-      if (adx > maxOffAxis) return;
-      mazeSwipeDiscrete(dy > 0 ? DIR.S : DIR.N);
-    }
-  };
-
-  const mazeSection = $("screenMaze");
-
-  const screenSwipeUsesPointer = mazeSection instanceof HTMLElement && typeof window.PointerEvent !== "undefined";
-
-  // Full maze screen gestures (anything not on buttons/links/inputs): canvas padding, empty areas, top/bottom blanks.
-  if (mazeSection instanceof HTMLElement && screenSwipeUsesPointer) {
-    mazeSection.addEventListener(
-      "pointerdown",
-      (e) => {
-        if (state.screen !== SCREENS.maze) return;
-        if (e.pointerType === "mouse" && e.buttons !== 1) return;
-        if (mazeSwipeConsumeTarget(e)) return;
-        try {
-          e.preventDefault(); // cooperate with CSS touch-action:none
-        } catch {
-          // ignore
-        }
-
-        try {
-          mazeSection.setPointerCapture(e.pointerId);
-        } catch {
-          // ignore
-        }
-
-        state.touchStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
-      },
-      { capture: true, passive: false },
-    );
-
-    mazeSection.addEventListener(
-      "pointerup",
-      (e) => {
-        const s = state.touchStart;
-        if (!s) return;
-        finishSwipeLikeFrom(s, { clientX: e.clientX, clientY: e.clientY, pointerId: e.pointerId });
-      },
-      { passive: true },
-    );
-
-    mazeSection.addEventListener(
-      "pointercancel",
-      () => {
-        state.touchStart = null;
-      },
-      { passive: true },
-    );
-  } else if (mazeSection instanceof HTMLElement) {
-    // Legacy touch-only fallback across the entire maze screen when PointerEvents are unavailable.
-    mazeSection.addEventListener(
-      "touchstart",
-      (e) => {
-        if (state.screen !== SCREENS.maze) return;
-        if (!(e.target instanceof Element)) return;
-        // ignore UI controls
-        if (e.target.closest?.("button,a,input,textarea,select,.dpad-cluster")) return;
-        if (e.touches.length !== 1) return;
-        const t = e.touches[0];
-        state.touchStart = { x: t.clientX, y: t.clientY };
-      },
-      { passive: true },
-    );
-
-    mazeSection.addEventListener(
-      "touchend",
-      (e) => {
-        const s = state.touchStart;
-        if (!s) return;
-        const t = e.changedTouches[0];
-        if (!t) return;
-        finishSwipeLikeFrom(s, { clientX: t.clientX, clientY: t.clientY, pointerId: 0 });
-      },
-      { passive: true },
-    );
-  }
-
-  // Keyboard steering (desktop): arrows + WASD.
-  if (!mazeKbBound) {
-    mazeKbBound = true;
-    window.addEventListener("keydown", mazeOnKeyDown, { passive: false });
-    window.addEventListener("keyup", mazeOnKeyUp, { passive: true });
-  }
-}
-
-// ---------------------------
-// Trivia bank (200+)
-// Notes: short factual questions (no copyrighted quote dumps)
-// ---------------------------
-
-const TRIVIA_BANK = [
-  { q: "In The Dark Knight, what is Batman’s city called?", c: ["Metropolis", "Gotham", "Atlantis", "Springfield"], a: 1 },
-  { q: "Which film features the planet Pandora?", c: ["Avatar", "Dune", "Interstellar", "Blade Runner 2049"], a: 0 },
-  { q: "Who directed Inception?", c: ["Denis Villeneuve", "Christopher Nolan", "James Cameron", "David Fincher"], a: 1 },
-  { q: "In Titanic, what is the ship’s name?", c: ["Britannic", "Lusitania", "Titanic", "Queen Mary"], a: 2 },
-  { q: "In The Matrix, what is Neo’s real name?", c: ["Thomas Anderson", "John Wick", "Peter Parker", "Ethan Hunt"], a: 0 },
-  { q: "Which movie is set on the desert planet Arrakis?", c: ["Mad Max: Fury Road", "Dune", "Lawrence of Arabia", "Arrival"], a: 1 },
-  { q: "In Interstellar, what is the name of the robot with a rectangular body?", c: ["TARS", "R2-D2", "WALL·E", "K-2SO"], a: 0 },
-  { q: "Which film features the Infinity Gauntlet?", c: ["Avengers: Infinity War", "Guardians of the Galaxy", "Iron Man", "Thor"], a: 0 },
-  { q: "Jack Sparrow is a character from which series?", c: ["Pirates of the Caribbean", "Star Trek", "Indiana Jones", "James Bond"], a: 0 },
-  { q: "In Harry Potter, what is the school called?", c: ["Beauxbatons", "Hogwarts", "Durmstrang", "Ilvermorny"], a: 1 },
-
-  // --- Bulk-generated set: popular-film focused, factual, 4-choice each ---
-  { q:"In The Lord of the Rings, what is Frodo’s surname?", c:["Baggins","Brandybuck","Took","Gamgee"], a:0 },
-  { q:"Which character says 'I am your father' in Star Wars?", c:["Obi-Wan Kenobi","Darth Vader","Yoda","Han Solo"], a:1 },
-  { q:"In Avengers: Endgame, what time-travel device do they use?", c:["Tesseract","Quantum Tunnel","Time Stone only","DeLorean"], a:1 },
-  { q:"Who directed Pulp Fiction?", c:["Quentin Tarantino","Martin Scorsese","Guy Ritchie","Paul Thomas Anderson"], a:0 },
-  { q:"In Gladiator, what is Maximus’ role at the start?", c:["Senator","General","Merchant","Slave"], a:1 },
-  { q:"In Jurassic Park, what kind of creature is the main threat in the finale?", c:["Velociraptors","Pterosaurs","Mosasaur","Triceratops"], a:0 },
-  { q:"In Forrest Gump, what sport does Forrest receive a scholarship for?", c:["Football","Basketball","Baseball","Hockey"], a:0 },
-  { q:"Which Pixar film features a rat who cooks in Paris?", c:["Up","Ratatouille","Toy Story","Coco"], a:1 },
-  { q:"In Spider-Man: No Way Home, which villain is associated with mechanical tentacles?", c:["Green Goblin","Doctor Octopus","Sandman","Lizard"], a:1 },
-  { q:"In The Godfather, the Corleone family business is mainly in…", c:["Shipping","Crime","Banking","Oil"], a:1 },
-
-  // Keep adding to reach 200. (Compact, one-liners)
-  { q:"In John Wick, what is John’s former profession?", c:["Detective","Hitman","Lawyer","Doctor"], a:1 },
-  { q:"Which movie features the quote 'I'll be back'?", c:["Predator","The Terminator","RoboCop","Die Hard"], a:1 },
-  { q:"In The Shawshank Redemption, what is Andy Dufresne’s job?", c:["Accountant","Banker","Doctor","Engineer"], a:1 },
-  { q:"In Fight Club, what is NOT allowed to be discussed?", c:["Work","Money","Fight Club","Music"], a:2 },
-  { q:"Which film is about dreams within dreams?", c:["Memento","Inception","Tenet","Insomnia"], a:1 },
-  { q:"In The Silence of the Lambs, what is Hannibal Lecter’s title?", c:["Dr.","Sir","Captain","Professor"], a:0 },
-  { q:"Which movie features the ship 'Black Pearl'?", c:["Pirates of the Caribbean","Master and Commander","Titanic","Moana"], a:0 },
-  { q:"In The Avengers, which city hosts the final battle?", c:["New York","London","Sokovia","Wakanda"], a:0 },
-  { q:"In Black Panther, what is the country called?", c:["Genosha","Wakanda","Latveria","Elbonia"], a:1 },
-  { q:"In Doctor Strange, what is the sanctum located in New York called?", c:["Sanctum Sanctorum","Hall of Justice","Batcave","Citadel"], a:0 },
-  { q:"In Iron Man, what powers the arc reactor?", c:["Vibranium","Palladium","Energy core","Kyber crystal"], a:2 },
-  { q:"In Captain America: The First Avenger, what is Steve’s last name?", c:["Rogers","Barnes","Stark","Wilson"], a:0 },
-  { q:"In Top Gun: Maverick, what is Maverick’s real name?", c:["Pete Mitchell","Nick Bradshaw","Tom Kazansky","Brad Simpson"], a:0 },
-  { q:"In Mission: Impossible, what is Ethan Hunt’s job?", c:["Spy/agent","Chef","Teacher","Astronaut"], a:0 },
-  { q:"In The Bourne Identity, what is Bourne’s first name?", c:["Jason","Jack","James","John"], a:0 },
-  { q:"In The Hunger Games, what is the protagonist’s name?", c:["Katniss Everdeen","Tris Prior","Bella Swan","Rey"], a:0 },
-  { q:"In Twilight, what is the vampire family’s surname?", c:["Cullen","Volturi","Swan","Black"], a:0 },
-  { q:"The Revenant is mainly a story of…", c:["Survival and revenge","Space travel","A heist","Time loops"], a:0 },
-  { q:"In Mad Max: Fury Road, what does Max wear on his face early on?", c:["Gas mask","Muzzle","Helmet","Bandana"], a:1 },
-  { q:"In The Prestige, the rivalry is between two…", c:["Lawyers","Magicians","Boxers","Pilots"], a:1 },
-
-  // --- Extra built-in pool (offline fallback): very easy, non-actor ---
-  { q:"In Star Wars, what weapon do Jedi often use?", c:["Lightsaber","Magic wand","Laser pointer","Boomerang"], a:0 },
-  { q:"In Star Wars, what color is Yoda’s skin?", c:["Green","Blue","Purple","Orange"], a:0 },
-  { q:"In Frozen, what is the snowman’s name?", c:["Olaf","Sven","Kristoff","Hans"], a:0 },
-  { q:"Which movie features a talking donkey named Donkey?", c:["Shrek","Cars","Coco","Moana"], a:0 },
-  { q:"In Toy Story, what is the cowboy doll’s name?", c:["Woody","Buzz","Rex","Hamm"], a:0 },
-  { q:"In Toy Story, what is the space ranger’s name?", c:["Buzz Lightyear","Luke Skywalker","Star-Lord","Flash Gordon"], a:0 },
-  { q:"Which movie is about blue people called Na’vi?", c:["Avatar","Aladdin","Up","Jaws"], a:0 },
-  { q:"In Finding Nemo, what kind of fish is Nemo?", c:["Clownfish","Shark","Goldfish","Tuna"], a:0 },
-  { q:"In The Lion King, who is Simba’s father?", c:["Mufasa","Scar","Timon","Zazu"], a:0 },
-  { q:"In The Lion King, who is the villain?", c:["Scar","Mufasa","Rafiki","Nala"], a:0 },
-  { q:"In Aladdin, what kind of creature is Genie?", c:["Genie","Dragon","Goblin","Robot"], a:0 },
-  { q:"In Moana, what is Moana’s friend chicken called?", c:["Heihei","Pua","Maui","Kakamora"], a:0 },
-  { q:"In Monsters, Inc., what is the little girl’s nickname?", c:["Boo","Lulu","Mimi","Jojo"], a:0 },
-  { q:"In Up, what are the balloons attached to?", c:["A house","A car","A boat","A train"], a:0 },
-  { q:"In Cars, what kind of vehicle is Lightning McQueen?", c:["Race car","Truck","Motorcycle","Plane"], a:0 },
-  { q:"In Coco, the story focuses on which theme?", c:["Family","Aliens","Pirates","Robots"], a:0 },
-  { q:"In Inside Out, which emotion is blue?", c:["Sadness","Anger","Joy","Disgust"], a:0 },
-  { q:"In The Incredibles, the family are…", c:["Superheroes","Pirates","Detectives","Wizards"], a:0 },
-  { q:"In Spider-Man, Spider-Man shoots…", c:["Webs","Fire","Ice","Water"], a:0 },
-  { q:"In Batman, Batman is also known as the…", c:["Dark Knight","Fast Runner","Sky Captain","Metal Man"], a:0 },
-  { q:"In Superman, what is Superman’s home planet?", c:["Krypton","Pandora","Arrakis","Vulcan"], a:0 },
-  { q:"In The Avengers, what team are they?", c:["Superheroes","Dinosaurs","Robots","Vampires"], a:0 },
-  { q:"In Doctor Strange, what kind of power does he use?", c:["Magic","Only swords","Only guns","Only cooking"], a:0 },
-  { q:"In Thor, Thor’s weapon is usually a…", c:["Hammer","Bow","Shield","Whip"], a:0 },
-  { q:"In Captain America, his famous item is a…", c:["Shield","Crown","Ring","Wand"], a:0 },
-  { q:"In Black Panther, the setting is mostly in…", c:["Wakanda","Gotham","Hogwarts","Narnia"], a:0 },
-  { q:"In Iron Man, Iron Man wears a…", c:["Suit of armor","Cape","Wizard robe","Spacesuit only"], a:0 },
-  { q:"In Guardians of the Galaxy, they travel in…", c:["A spaceship","A submarine","A train","A bicycle"], a:0 },
-  { q:"In Harry Potter, what is the sport played on broomsticks?", c:["Quidditch","Soccer","Chess","Baseball"], a:0 },
-  { q:"In Harry Potter, what is the magic wand used for?", c:["Casting spells","Cooking pasta","Fixing cars","Playing music"], a:0 },
-  { q:"In The Lord of the Rings, the journey is to destroy a…", c:["Ring","Sword","Crown","Map"], a:0 },
-  { q:"In The Lord of the Rings, where is the ring taken to be destroyed?", c:["Mount Doom","Hogwarts","Pandora","Atlantis"], a:0 },
-  { q:"In The Hobbit, the creature says 'my precious' is a…", c:["Gollum","Smaug","Gandalf","Legolas"], a:0 },
-  { q:"In Jurassic Park, what animals return to life?", c:["Dinosaurs","Dragons","Wolves","Whales"], a:0 },
-  { q:"In Jaws, what animal is the threat?", c:["Shark","Lion","Bear","Crocodile"], a:0 },
-  { q:"In King Kong, King Kong is a…", c:["Giant gorilla","Dragon","Robot","Alien"], a:0 },
-  { q:"In Godzilla movies, Godzilla is a…", c:["Giant monster","Wizard","Detective","Pirate"], a:0 },
-  { q:"In The Terminator, the Terminator is a…", c:["Robot","Wizard","Vampire","Clown"], a:0 },
-  { q:"In Back to the Future, the main vehicle is a…", c:["DeLorean","Motorbike","Boat","Helicopter"], a:0 },
-  { q:"In E.T., E.T. is a…", c:["Alien","Dinosaur","Robot","Ghost"], a:0 },
-  { q:"In Home Alone, the main character is left…", c:["Home alone","On the moon","In a jungle","In a submarine"], a:0 },
-  { q:"In The Wizard of Oz, what color is the famous road?", c:["Yellow","Red","Blue","Green"], a:0 },
-  { q:"In The Sound of Music, the story involves…", c:["Singing","Time travel","Space battles","Zombies"], a:0 },
-  { q:"In The Great Gatsby, the setting is mainly the…", c:["1920s","Future","Medieval era","Stone Age"], a:0 },
-  { q:"In The Hunger Games, the event is a…", c:["Competition","Wedding","Concert","Space mission"], a:0 },
-  { q:"In The Matrix, what is the Matrix?", c:["A simulated world","A ship","A school","A treasure"], a:0 },
-  { q:"In Interstellar, the story is about…", c:["Space travel","Cooking","Football","Painting"], a:0 },
-  { q:"In Inception, the story involves…", c:["Dreams","Dinosaurs","Pirates","Aliens only"], a:0 },
-  { q:"In Gladiator, the setting is ancient…", c:["Rome","Japan","Brazil","Australia"], a:0 },
-  { q:"In Pirates of the Caribbean, the main theme is…", c:["Pirates","Baseball","Chess","Robots"], a:0 },
-  { q:"In James Bond films, Bond is a…", c:["Spy","Astronaut","Chef","Vampire hunter"], a:0 },
-  { q:"In Indiana Jones, Indy is an…", c:["Archaeologist","Alien","Wizard","Race car driver"], a:0 },
-  { q:"In Transformers, the characters can…", c:["Transform","Teleport only","Fly only","Swim only"], a:0 },
-  { q:"In The Little Mermaid, the main character is a…", c:["Mermaid","Witch","Robot","Dinosaur"], a:0 },
-  { q:"In Beauty and the Beast, the Beast lives in a…", c:["Castle","Cave","Spaceship","Hotel"], a:0 },
-  { q:"In Cinderella, the famous item is a…", c:["Glass slipper","Golden sword","Magic ring","Robot arm"], a:0 },
-  { q:"In Snow White, there are… dwarfs.", c:["Seven","Five","Ten","Twelve"], a:0 },
-  { q:"In Sleeping Beauty, the princess is put to sleep by a…", c:["Curse","Robot","Car crash","Spaceship"], a:0 },
-  { q:"In The Princess Bride, the story is a…", c:["Fairy tale adventure","Space war","Sports documentary","Horror"], a:0 },
-  { q:"In The Notebook, the genre is mainly…", c:["Romance","Sci‑fi","Horror","Western"], a:0 },
-  { q:"In The Conjuring, the genre is…", c:["Horror","Comedy","Musical","Sports"], a:0 },
-  { q:"In The Shining, the setting is a…", c:["Hotel","School","Spaceship","Farm"], a:0 },
-  { q:"In The Exorcist, the theme involves…", c:["Possession","Time travel","Aliens","Robots"], a:0 },
-  { q:"In The Notebook, the story is about…", c:["A couple","Dinosaurs","Robots","Pirates"], a:0 },
-  { q:"In The Social Network, the story is about…", c:["A social media site","A magic school","A pirate ship","A space station"], a:0 },
-  { q:"In The Martian, the setting is…", c:["Mars","Venus","The Moon","Earth’s ocean"], a:0 },
-  { q:"In Gravity, the setting is…", c:["Space","Underwater","Desert","A castle"], a:0 },
-  { q:"In The Fast and the Furious, the focus is…", c:["Cars/racing","Wizards","Dinosaurs","Aliens"], a:0 },
-  { q:"In Rocky, the main sport is…", c:["Boxing","Tennis","Golf","Swimming"], a:0 },
-  { q:"In The Karate Kid, the sport is…", c:["Karate","Soccer","Basketball","Cycling"], a:0 },
-  { q:"In The Notebook, the famous item is…", c:["A notebook","A lightsaber","A shield","A ring"], a:0 },
-
-  // Keep expanding the offline pool with similar “everyone knows” items as needed.
-];
-
-let triviaCache = [];
-let triviaToken = null;
-let triviaWarmupStarted = false;
-const TRIVIA_USED_LS_KEY = "sv_trivia_used_v1";
-const TRIVIA_USED_MAX = 5000;
-
-function safeJsonParse(s, fallback) {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return fallback;
-  }
-}
-
-function triviaId(item) {
-  // stable-enough ID without a crypto dependency
-  return [item.q, ...item.c].join("|").toLowerCase();
-}
-
-function loadUsedTriviaSet() {
-  const arr = safeJsonParse(localStorage.getItem(TRIVIA_USED_LS_KEY) || "[]", []);
-  return new Set(Array.isArray(arr) ? arr : []);
-}
-
-function saveUsedTriviaSet(set) {
-  const arr = [...set];
-  if (arr.length > TRIVIA_USED_MAX) arr.splice(0, arr.length - TRIVIA_USED_MAX);
-  localStorage.setItem(TRIVIA_USED_LS_KEY, JSON.stringify(arr));
-}
-
-function decodeHtml(str) {
-  const el = document.createElement("textarea");
-  el.innerHTML = str;
-  return el.value;
-}
-
-function shuffleQuizChoices(item) {
-  // Ensure correct answer isn't biased toward a fixed position for built-in questions.
-  const pairs = item.c.map((label, idx) => ({ label, idx }));
-  shuffle(pairs);
-  const choices = pairs.map((p) => p.label);
-  const correct = pairs.findIndex((p) => p.idx === item.a);
-  return { q: item.q, c: choices, a: correct };
-}
-
-async function getTriviaToken() {
-  if (triviaToken) return triviaToken;
-  try {
-    const r = await fetch("https://opentdb.com/api_token.php?command=request");
-    const j = await r.json();
-    if (j?.response_code === 0 && j?.token) {
-      triviaToken = j.token;
-      return triviaToken;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function normalizeOpenTdbItem(it) {
-  const correct = decodeHtml(it.correct_answer);
-  const incorrect = it.incorrect_answers.map(decodeHtml);
-  const choices = shuffle([correct, ...incorrect]);
-  const q = decodeHtml(it.question);
-  return {
-    q,
-    c: choices,
-    a: choices.indexOf(correct),
-  };
-}
-
-function looksTooHard(q) {
-  const s = q.toLowerCase();
-  if (q.length > 95) return true;
-  if (/\b(episode|director|composer|screenplay|released|year|academy|oscar|box office|budget)\b/i.test(q)) return true;
-  if (/\b(roman numeral|imdb)\b/i.test(q)) return true;
-  // Actor / voice / cast questions are often too niche; avoid them.
-  if (/\b(actor|actress|cast|portray|played by|who plays|who played|voiced|voice actor)\b/i.test(q)) return true;
-  // prefer simple “Which film / character / actor” style
-  const ok = /\b(which|who|what)\b/i.test(q);
-  return !ok;
-}
-
-async function topUpTriviaCache(target = 800) {
-  if (triviaCache.length >= target) return;
-  const token = await getTriviaToken();
-
-  while (triviaCache.length < target) {
-    const amount = Math.min(50, target - triviaCache.length);
-    const url =
-      "https://opentdb.com/api.php" +
-      `?amount=${amount}&category=11&difficulty=easy&type=multiple` +
-      (token ? `&token=${encodeURIComponent(token)}` : "");
-
+  async function fetchJson(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TRIVIA_API.timeoutMs);
     try {
-      const r = await fetch(url);
-      const j = await r.json();
-      if (j?.response_code !== 0 || !Array.isArray(j?.results)) break;
-      const used = loadUsedTriviaSet();
-      const normalized = j.results
-        .map(normalizeOpenTdbItem)
-        .filter((x) => !looksTooHard(x.q))
-        .filter((x) => !used.has(triviaId(x)));
-      triviaCache.push(...normalized);
-    } catch {
-      break;
+      const response = await fetch(url, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
     }
-
-    // pacing (avoid hammering)
-    await new Promise((res) => setTimeout(res, 1200));
-  }
-}
-
-function startQuiz() {
-  if (!triviaWarmupStarted) {
-    triviaWarmupStarted = true;
-    topUpTriviaCache(800);
   }
 
-  const used = loadUsedTriviaSet();
-  const pool = triviaCache.length >= 30 ? triviaCache : TRIVIA_BANK;
-  const picked = [];
+  const trivia = {
+    cache: [],
+    token: null,
+    exhausted: false,
+    pending: null,
 
-  // Pick 10 unique questions, removing them from the active pool immediately.
-  // This prevents repeats within the same session.
-  const candidates = shuffle([...pool]);
-  for (const item of candidates) {
-    const id = triviaId(item);
-    if (used.has(id)) continue;
-    picked.push(item);
-    used.add(id);
-    if (picked.length >= 10) break;
-  }
+    /** Top up the cache in the background. Safe to call as often as you like. */
+    fill() {
+      if (this.pending || this.exhausted || this.cache.length >= TRIVIA_API.cacheTarget) return;
+      if (navigator.onLine === false) return;
+      this.pending = this.fillLoop()
+        .catch(() => {
+          /* offline or API down: the built-in bank covers it */
+        })
+        .finally(() => {
+          this.pending = null;
+        });
+    },
 
-  // Persist used IDs (avoid repeats across sessions).
-  saveUsedTriviaSet(used);
+    async fillLoop() {
+      let amount = TRIVIA_API.batchSize;
 
-  // Remove picked questions from the in-memory cache right now.
-  if (pool === triviaCache) {
-    const pickedIds = new Set(picked.map(triviaId));
-    triviaCache = triviaCache.filter((x) => !pickedIds.has(triviaId(x)));
-    // Keep the cache topped up in the background.
-    topUpTriviaCache(800);
-  }
+      while (this.cache.length < TRIVIA_API.cacheTarget && !this.exhausted) {
+        if (!this.token) {
+          const session = await fetchJson(`${TRIVIA_API.base}/api_token.php?command=request`);
+          this.token = session.response_code === 0 ? session.token : null;
+          await sleep(TRIVIA_API.requestGapMs);
+        }
 
-  const baseQueue = picked.length ? picked : shuffle([...TRIVIA_BANK]).slice(0, 10);
-  // OpenTDB items are already shuffled in normalizeOpenTdbItem(); built-in bank needs shuffling.
-  state.quizQueue = baseQueue.map((it) => (pool === TRIVIA_BANK ? shuffleQuizChoices(it) : it));
-  state.quizIndex = 0;
-  state.quizScore = 0;
-  state.quizPicked = null;
-  state.quizLocked = false;
-  showScreen(SCREENS.quiz);
-  renderQuiz();
-}
+        const params = new URLSearchParams({
+          amount: String(amount),
+          category: String(TRIVIA_API.category),
+          difficulty: TRIVIA_API.difficulty,
+          type: "multiple",
+        });
+        if (this.token) params.set("token", this.token);
 
-function renderQuiz() {
-  const item = state.quizQueue[state.quizIndex];
-  els.quizMeta.textContent = `${state.quizIndex + 1}/10`;
-  els.quizQuestion.textContent = item.q;
-  els.quizChoices.innerHTML = "";
-  els.quizNextBtn.disabled = true;
-  els.quizNote.textContent = "Pick one answer.";
-  state.quizPicked = null;
-  state.quizLocked = false;
+        const data = await fetchJson(`${TRIVIA_API.base}/api.php?${params}`);
+        switch (data.response_code) {
+          case 0:
+            this.add(data.results.map(fromApi));
+            break;
+          case 1: // fewer questions left than requested
+            if (amount > 10) amount = 10;
+            else this.exhausted = true;
+            break;
+          case 3: // token expired
+            this.token = null;
+            break;
+          case 5: // rate limited, the pause below is enough
+            break;
+          default: // 2 = bad request, 4 = every question already served
+            this.exhausted = true;
+        }
 
-  item.c.forEach((label, idx) => {
-    const b = document.createElement("button");
-    b.type = "button";
-    b.className = "choice";
-    b.textContent = label;
-    b.addEventListener("click", () => pickQuiz(idx));
-    els.quizChoices.appendChild(b);
-  });
-}
-
-function pickQuiz(idx) {
-  if (state.quizLocked) return;
-  state.quizPicked = idx;
-  els.quizNextBtn.disabled = false;
-  [...els.quizChoices.children].forEach((el, i) => {
-    el.classList.toggle("choice--selected", i === idx);
-  });
-}
-
-function submitQuiz() {
-  const item = state.quizQueue[state.quizIndex];
-  const picked = state.quizPicked;
-  if (picked == null) return;
-  state.quizLocked = true;
-
-  const kids = [...els.quizChoices.children];
-  kids.forEach((el, i) => {
-    el.classList.remove("choice--selected");
-    if (i === item.a) el.classList.add("choice--correct");
-    else if (i === picked) el.classList.add("choice--wrong");
-  });
-
-  const ok = picked === item.a;
-  if (ok) state.quizScore++;
-  els.quizNote.textContent = ok ? "Correct." : `Wrong. Correct answer: ${item.c[item.a]}`;
-
-  els.quizNextBtn.textContent = state.quizIndex === 9 ? "Finish" : "Next";
-}
-
-function nextQuiz() {
-  if (!state.quizLocked) {
-    submitQuiz();
-    return;
-  }
-
-  if (state.quizIndex === 9) {
-    if (state.quizScore >= 5) {
-      openModal(
-        {
-          title: "Nice!",
-          text: `Score: ${state.quizScore}/10. That counts — here’s your pass.`,
-          primary: "Show Pass",
-        },
-        () => showScreen(SCREENS.win),
-      );
-    } else {
-      openModal(
-        {
-          title: "Almost.",
-          text: `Score: ${state.quizScore}/10. Get 5/10 or more to earn the pass.`,
-          primary: "Try Again",
-        },
-        () => startQuiz(),
-      );
-    }
-    return;
-  }
-
-  state.quizIndex++;
-  renderQuiz();
-}
-
-function bindUI() {
-  els.playAgainBtn.addEventListener("click", () => showScreen(SCREENS.welcome));
-  els.startMazeBtn.addEventListener("click", () => startMaze({ difficulty: "hard" }));
-  els.startQuizBtn.addEventListener("click", startQuiz);
-  els.newMazeBtn.addEventListener("click", () => startMaze({ difficulty: "hard" }));
-  els.quizNextBtn.addEventListener("click", nextQuiz);
-  els.homeFromMazeBtn.addEventListener("click", () => showScreen(SCREENS.welcome));
-  els.homeFromQuizBtn.addEventListener("click", () => showScreen(SCREENS.welcome));
-
-  els.modal.addEventListener("click", (e) => {
-    const target = e.target;
-    if (!(target instanceof HTMLElement)) return;
-    if (target.dataset.close === "1") closeModal();
-  });
-}
-
-let resizeRaf = 0;
-let resizeT = 0;
-function onResize() {
-  if (state.screen !== SCREENS.maze) return;
-  cancelAnimationFrame(resizeRaf);
-  clearTimeout(resizeT);
-
-  // Let the viewport settle a bit (especially on mobile)
-  resizeT = setTimeout(() => {
-    resizeRaf = requestAnimationFrame(() => {
-      const beforeW = state.canvasPx.w;
-      const beforeH = state.canvasPx.h;
-      computeCanvasMetrics();
-      if (state.canvasPx.w !== beforeW || state.canvasPx.h !== beforeH) {
-        rebuildStaticLayer();
-        const center = cellCenter(state.player.r, state.player.c);
-        state.player.x = center.x;
-        state.player.y = center.y;
-        state.player.tx = center.x;
-        state.player.ty = center.y;
+        await sleep(TRIVIA_API.requestGapMs);
       }
-    });
-  }, 120);
-}
+    },
 
-function boot() {
-  showScreen(SCREENS.welcome);
-  bindUI();
-  bindMazeControls();
-  window.addEventListener("resize", onResize);
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener("resize", onResize);
+    add(items) {
+      const seen = loadSeenQuestions();
+      const known = new Set([...this.cache, ...QUESTION_BANK].map((q) => q.id));
+      for (const item of items) {
+        if (!isGoodFit(item) || seen.has(item.id) || known.has(item.id)) continue;
+        known.add(item.id);
+        this.cache.push(item);
+      }
+    },
+  };
+
+  function loadSeenQuestions() {
+    try {
+      const list = JSON.parse(storage.get(STORAGE.seenQuestions) || "[]");
+      return new Set(Array.isArray(list) ? list : []);
+    } catch {
+      return new Set();
+    }
   }
 
-  // Warm trivia quietly (web-backed), but never block UI
-  triviaWarmupStarted = true;
-  topUpTriviaCache(200);
+  function saveSeenQuestions(seen) {
+    const list = [...seen].slice(-SEEN_LIMIT);
+    storage.set(STORAGE.seenQuestions, JSON.stringify(list));
+  }
 
-  // Theme picker
-  const saved = localStorage.getItem(THEME_LS_KEY) || "cyan";
-  applyTheme(saved in THEMES ? saved : "cyan");
-  bindThemePicker();
-}
+  /**
+   * Pick a round of questions the player has not seen on this device yet,
+   * preferring fresh API questions. Once everything has been played, the
+   * history is cleared and the rotation starts again.
+   */
+  function buildRound(size) {
+    const seen = loadSeenQuestions();
+    const unseen = (pool) => shuffle(pool.filter((q) => !seen.has(q.id)));
 
-boot();
+    let round = [...unseen(trivia.cache), ...unseen(QUESTION_BANK)].slice(0, size);
 
-function applyTheme(name) {
-  const theme = THEMES[name] || THEMES.cyan;
-  const root = document.documentElement;
-  root.style.setProperty("--primary-color", theme.primary);
-  root.style.setProperty("--primary-2", theme.primary2);
-  root.style.setProperty("--primary-rgb", theme.primaryRgb);
-  root.style.setProperty("--primary2-rgb", theme.primary2Rgb);
-  root.style.setProperty("--focus-ring", theme.focus);
-  localStorage.setItem(THEME_LS_KEY, name);
+    if (round.length < size) {
+      seen.clear();
+      const taken = new Set(round.map((q) => q.id));
+      const refill = shuffle([...trivia.cache, ...QUESTION_BANK].filter((q) => !taken.has(q.id)));
+      round = [...round, ...refill].slice(0, size);
+    }
 
-  document.querySelectorAll(".swatch").forEach((b) => {
-    if (!(b instanceof HTMLButtonElement)) return;
-    b.setAttribute("aria-pressed", b.dataset.theme === name ? "true" : "false");
-  });
+    const used = new Set(round.map((q) => q.id));
+    used.forEach((id) => seen.add(id));
+    saveSeenQuestions(seen);
+    trivia.cache = trivia.cache.filter((q) => !used.has(q.id));
 
-  // Force maze to rebuild with new colors
-  state.staticDirty = true;
-  rebuildStaticLayer();
-}
-
-function bindThemePicker() {
-  const bar = document.getElementById("themebar");
-  if (!bar) return;
-  bar.querySelectorAll(".swatch").forEach((btn) => {
-    if (!(btn instanceof HTMLButtonElement)) return;
-    btn.addEventListener("click", () => {
-      const t = btn.dataset.theme;
-      if (!t) return;
-      applyTheme(t);
+    return round.map((q) => {
+      const choices = shuffle([q.answer, ...q.wrong]);
+      return { question: q.question, choices, correct: choices.indexOf(q.answer) };
     });
-  });
-}
+  }
 
+  // ---------------------------------------------------------------------------
+  // Quiz
+  // ---------------------------------------------------------------------------
+
+  const quiz = {
+    round: [],
+    index: 0,
+    score: 0,
+    selected: null,
+    revealed: false,
+  };
+
+  const CHOICE_KEYS = ["A", "B", "C", "D"];
+
+  function startQuiz() {
+    quiz.round = buildRound(QUIZ.length);
+    quiz.index = 0;
+    quiz.score = 0;
+    showScreen("quiz");
+    renderQuestion();
+    trivia.fill();
+  }
+
+  function renderQuestion() {
+    const item = quiz.round[quiz.index];
+    const total = quiz.round.length;
+
+    quiz.selected = null;
+    quiz.revealed = false;
+
+    ui.quizCount.textContent = `${quiz.index + 1} / ${total}`;
+    ui.quizBar.style.width = `${(quiz.index / total) * 100}%`;
+    ui.quizQuestion.textContent = item.question;
+    ui.quizNote.textContent = "Pick an answer.";
+    ui.quizNote.dataset.tone = "";
+    ui.quizNextBtn.textContent = "Check";
+    ui.quizNextBtn.disabled = true;
+
+    const buttons = item.choices.map((label, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "choice";
+      button.setAttribute("aria-pressed", "false");
+
+      const key = document.createElement("span");
+      key.className = "choice__key";
+      key.setAttribute("aria-hidden", "true");
+      key.textContent = CHOICE_KEYS[index];
+
+      const text = document.createElement("span");
+      text.className = "choice__text";
+      text.textContent = label;
+
+      button.append(key, text);
+      button.addEventListener("click", () => selectChoice(index));
+      return button;
+    });
+    ui.quizChoices.replaceChildren(...buttons);
+  }
+
+  function selectChoice(index) {
+    if (quiz.revealed) return;
+    quiz.selected = index;
+    ui.quizNextBtn.disabled = false;
+    [...ui.quizChoices.children].forEach((button, i) => {
+      button.classList.toggle("choice--selected", i === index);
+      button.setAttribute("aria-pressed", String(i === index));
+    });
+  }
+
+  function revealAnswer() {
+    const item = quiz.round[quiz.index];
+    const correct = quiz.selected === item.correct;
+    quiz.revealed = true;
+    if (correct) quiz.score++;
+
+    [...ui.quizChoices.children].forEach((button, i) => {
+      button.classList.remove("choice--selected");
+      button.classList.toggle("choice--correct", i === item.correct);
+      button.classList.toggle("choice--wrong", i === quiz.selected && !correct);
+      button.setAttribute("aria-disabled", "true");
+    });
+
+    ui.quizNote.textContent = correct ? "Correct!" : `Not quite. The answer is ${item.choices[item.correct]}.`;
+    ui.quizNote.dataset.tone = correct ? "good" : "bad";
+    ui.quizBar.style.width = `${((quiz.index + 1) / quiz.round.length) * 100}%`;
+    ui.quizNextBtn.textContent = quiz.index === quiz.round.length - 1 ? "See result" : "Next question";
+  }
+
+  function advanceQuiz() {
+    if (!quiz.revealed) {
+      if (quiz.selected !== null) revealAnswer();
+      return;
+    }
+
+    if (quiz.index < quiz.round.length - 1) {
+      quiz.index++;
+      renderQuestion();
+      return;
+    }
+
+    const { score } = quiz;
+    const total = quiz.round.length;
+    if (score >= QUIZ.passScore) {
+      modal.open({
+        title: "You passed",
+        text: `You scored ${score}/${total}. Your pass is on the next screen. Screenshot it to claim your stickers.`,
+        actionLabel: "Show pass",
+        dismissible: true,
+        onAction: () => showPass("Trivia", `${score}/${total} correct`),
+      });
+    } else {
+      modal.open({
+        title: "So close",
+        text: `You scored ${score}/${total}. Get ${QUIZ.passScore} or more to earn the pass.`,
+        actionLabel: "Try again",
+        dismissible: true,
+        onAction: startQuiz,
+      });
+    }
+  }
+
+  function handleQuizKeyDown(event) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+    const letter = CHOICE_KEYS.indexOf(event.key.toUpperCase());
+    const digit = /^[1-4]$/.test(event.key) ? Number(event.key) - 1 : -1;
+    const index = letter !== -1 ? letter : digit;
+    if (index !== -1 && index < ui.quizChoices.children.length) {
+      event.preventDefault();
+      selectChoice(index);
+      return;
+    }
+
+    // Enter works from anywhere except when a button already has focus
+    // (the browser clicks that button itself).
+    if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement) && !ui.quizNextBtn.disabled) {
+      event.preventDefault();
+      advanceQuiz();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Pass
+  // ---------------------------------------------------------------------------
+
+  function showPass(mode, result) {
+    ui.passMode.textContent = mode;
+    ui.passResult.textContent = result;
+    // Fixed locale so the pass reads the same on every phone (the UI is English).
+    ui.passIssued.textContent = new Date().toLocaleString("en-GB", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    showScreen("win");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Theme
+  // ---------------------------------------------------------------------------
+
+  function applyTheme(name, { save = true } = {}) {
+    const theme = THEMES.includes(name) ? name : DEFAULT_THEME;
+    document.documentElement.dataset.theme = theme;
+    for (const swatch of ui.swatches) {
+      swatch.setAttribute("aria-pressed", String(swatch.dataset.theme === theme));
+    }
+    if (save) storage.set(STORAGE.theme, theme);
+
+    maze.staticDirty = true;
+    maze.needsDraw = true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Wiring
+  // ---------------------------------------------------------------------------
+
+  function bindUi() {
+    ui.startMazeBtn.addEventListener("click", startMaze);
+    ui.newMazeBtn.addEventListener("click", startMaze);
+    ui.homeFromMazeBtn.addEventListener("click", () => showScreen("welcome"));
+
+    ui.startQuizBtn.addEventListener("click", startQuiz);
+    ui.quizNextBtn.addEventListener("click", advanceQuiz);
+    ui.homeFromQuizBtn.addEventListener("click", () => showScreen("welcome"));
+
+    ui.playAgainBtn.addEventListener("click", () => showScreen("welcome"));
+
+    ui.modalActionBtn.addEventListener("click", () => modal.confirm());
+    ui.modalBackdrop.addEventListener("click", () => {
+      if (modal.dismissible) modal.close();
+    });
+
+    for (const swatch of ui.swatches) {
+      swatch.addEventListener("click", () => applyTheme(swatch.dataset.theme));
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (modal.isOpen) modal.handleKey(event);
+      else if (currentScreen === "maze") handleMazeKeyDown(event);
+      else if (currentScreen === "quiz") handleQuizKeyDown(event);
+    });
+    window.addEventListener("keyup", handleKeyUp);
+
+    // Keys released while the window is in the background never send keyup.
+    window.addEventListener("blur", releaseMazeInput);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) releaseMazeInput();
+    });
+  }
+
+  function boot() {
+    storage.remove(STORAGE.legacySeenQuestions);
+    applyTheme(storage.get(STORAGE.theme), { save: false });
+    bindUi();
+    bindMazeControls();
+
+    // Warm the question cache once the page has settled.
+    setTimeout(() => trivia.fill(), 1500);
+  }
+
+  boot();
+})();

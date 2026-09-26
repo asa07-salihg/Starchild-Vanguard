@@ -1,124 +1,145 @@
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Starchild Vanguard — Club Invite</title>
-  <meta name="description" content="Mobile-first club invite: dynamic maze challenge + trivia mode." />
-  <meta name="theme-color" content="#05080b" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Starchild Vanguard · Club Invite</title>
+  <meta name="description" content="Clear the maze or beat the film trivia to earn your Starchild Vanguard club pass.">
+  <meta name="theme-color" content="#05080b">
+  <meta name="color-scheme" content="dark">
+
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Starchild Vanguard · Club Invite">
+  <meta property="og:description" content="Clear the maze or beat the film trivia to earn your club pass.">
+  <meta property="og:url" content="https://asa07-salihg.github.io/Starchild-Vanguard/">
+  <meta property="og:image" content="https://asa07-salihg.github.io/Starchild-Vanguard/img/logo.png">
+  <meta name="twitter:card" content="summary">
+
+  <link rel="icon" type="image/png" href="img/logo.png">
+  <link rel="apple-touch-icon" href="img/logo.png">
   <link rel="stylesheet" href="style.css">
+  <script>
+    try { document.documentElement.dataset.theme = localStorage.getItem("sv_theme_v1") || "cyan"; } catch (e) {}
+  </script>
 </head>
 
-<body>
-  <div class="app" id="app" aria-label="Starchild Vanguard Club Invite">
-    <main class="stage" aria-label="Stage">
-      <!-- WELCOME -->
-      <section class="screen screen--active" id="screenWelcome" aria-label="Welcome">
+<body data-screen="welcome">
+  <div class="app" id="app">
+    <main class="stage">
+
+      <!-- Welcome -->
+      <section class="screen screen--active" id="screenWelcome" tabindex="-1" aria-labelledby="welcomeTitle">
         <div class="card hero">
-          <img class="hero__logo" src="img/logo.png" alt="Starchild Vanguard logo" />
-          <h1 class="hero__headline">WELCOME</h1>
-          <p class="hero__copy">
-            Beat a challenge, grab <strong>2 special stickers</strong>. Choose a mode:
-          </p>
+          <img class="hero__logo" src="img/logo.png" width="1000" height="1027" alt="Starchild Vanguard">
+          <h1 class="hero__title" id="welcomeTitle">Welcome</h1>
+          <p class="hero__copy">Beat one challenge and grab <strong>2 special stickers</strong>. Pick your mode:</p>
           <div class="hero__actions">
-            <button class="btn btn--primary btn--wide" id="startMazeBtn" type="button">Play Maze</button>
-            <button class="btn btn--ghost btn--wide" id="startQuizBtn" type="button">Play Trivia</button>
-            <a class="btn btn--ghost btn--wide" href="https://discord.gg/7KqduugrFQ" target="_blank" rel="noopener noreferrer">
-              Join Discord (Become a member)
-            </a>
+            <button class="btn btn--primary" id="startMazeBtn" type="button">Play Maze</button>
+            <button class="btn" id="startQuizBtn" type="button">Play Trivia</button>
+            <a class="btn btn--link" href="https://discord.gg/7KqduugrFQ" target="_blank" rel="noopener noreferrer">Join our Discord</a>
           </div>
         </div>
       </section>
 
-      <!-- MAZE -->
-      <section class="screen" id="screenMaze" aria-label="Maze">
-        <div class="playfield" aria-label="Maze container">
-          <div class="maze-frame" aria-label="Maze frame">
-            <canvas class="maze-canvas" id="mazeCanvas" aria-label="Maze canvas"></canvas>
+      <!-- Maze -->
+      <section class="screen screen--maze" id="screenMaze" tabindex="-1" aria-labelledby="mazeTitle">
+        <h2 class="visually-hidden" id="mazeTitle">Maze</h2>
+
+        <div class="maze-hud">
+          <button class="chip-btn" id="homeFromMazeBtn" type="button">Home</button>
+          <div class="maze-hud__stats">
+            <span class="stat"><span class="stat__label">Moves</span><span class="stat__value" id="mazeMoves">0</span></span>
+            <span class="stat"><span class="stat__label">Time</span><span class="stat__value" id="mazeTime">0:00</span></span>
           </div>
-          <div class="actionbar" aria-label="Maze actions">
-            <button class="subhud__btn" id="newMazeBtn" type="button">New</button>
-            <button class="subhud__btn" id="homeFromMazeBtn" type="button">Home</button>
-          </div>
+          <button class="chip-btn" id="newMazeBtn" type="button">New</button>
         </div>
 
-        <div class="controls" aria-label="Movement controls">
-          <div class="dpad-cluster" aria-label="Directional pad">
-            <button class="dpad dpad--up" id="btnUp" type="button" aria-label="Move up"></button>
-            <button class="dpad dpad--left" id="btnLeft" type="button" aria-label="Move left"></button>
-            <button class="dpad dpad--right" id="btnRight" type="button" aria-label="Move right"></button>
-            <button class="dpad dpad--down" id="btnDown" type="button" aria-label="Move down"></button>
+        <div class="maze-frame">
+          <canvas class="maze-canvas" id="mazeCanvas" role="img"
+            aria-label="Maze. Start in the top-left corner and reach the green ring."></canvas>
+        </div>
+
+        <div class="controls">
+          <div class="dpad" role="group" aria-label="Move">
+            <button class="dpad__btn dpad__btn--up" id="btnUp" type="button" aria-label="Up"></button>
+            <button class="dpad__btn dpad__btn--left" id="btnLeft" type="button" aria-label="Left"></button>
+            <button class="dpad__btn dpad__btn--right" id="btnRight" type="button" aria-label="Right"></button>
+            <button class="dpad__btn dpad__btn--down" id="btnDown" type="button" aria-label="Down"></button>
           </div>
         </div>
       </section>
 
-      <!-- QUIZ -->
-      <section class="screen" id="screenQuiz" aria-label="Trivia">
+      <!-- Trivia -->
+      <section class="screen" id="screenQuiz" tabindex="-1" aria-labelledby="quizTitle">
         <div class="card quiz">
           <div class="quiz__top">
-            <div class="quiz__title">Trivia</div>
-            <div class="quiz__meta" id="quizMeta">1/10</div>
+            <h2 class="quiz__title" id="quizTitle">Film Trivia</h2>
+            <span class="quiz__count" id="quizCount">1 / 10</span>
           </div>
-          <div class="quiz__q" id="quizQuestion">Question</div>
-          <div class="quiz__choices" id="quizChoices" aria-label="Answer choices"></div>
-          <div class="quiz__bottom">
-            <div class="quiz__note" id="quizNote">Pick one answer.</div>
-            <button class="btn btn--ghost btn--wide" id="quizNextBtn" type="button" disabled>Next</button>
-            <button class="btn btn--ghost btn--wide" id="homeFromQuizBtn" type="button">Home</button>
+          <div class="quiz__progress" aria-hidden="true"><span class="quiz__bar" id="quizBar"></span></div>
+
+          <p class="quiz__question" id="quizQuestion"></p>
+          <div class="quiz__choices" id="quizChoices" role="group" aria-labelledby="quizQuestion"></div>
+
+          <p class="quiz__note" id="quizNote" aria-live="polite">Pick an answer.</p>
+          <div class="quiz__actions">
+            <button class="btn btn--primary" id="quizNextBtn" type="button" disabled>Check</button>
+            <button class="btn" id="homeFromQuizBtn" type="button">Home</button>
           </div>
         </div>
       </section>
 
-      <!-- WIN -->
-      <section class="screen" id="screenWin" aria-label="Win">
-        <div class="ticket" aria-label="Special pass">
-          <div class="ticket__top">
-            <img class="ticket__logo" src="img/logo.png" alt="Starchild Vanguard logo" />
-            <div class="ticket__badge">CLUB INVITE</div>
+      <!-- Pass -->
+      <section class="screen" id="screenWin" tabindex="-1" aria-labelledby="passTitle">
+        <article class="ticket">
+          <header class="ticket__top">
+            <img class="ticket__logo" src="img/logo.png" width="1000" height="1027" alt="">
+            <span class="ticket__badge">Club invite</span>
+          </header>
+
+          <h2 class="ticket__title" id="passTitle">Special Pass</h2>
+
+          <dl class="ticket__meta">
+            <div><dt>Challenge</dt><dd id="passMode">-</dd></div>
+            <div><dt>Result</dt><dd id="passResult">-</dd></div>
+            <div><dt>Issued</dt><dd id="passIssued">-</dd></div>
+          </dl>
+
+          <p class="ticket__copy">
+            Screenshot this pass and show it to a club manager to claim your <strong>2 special stickers</strong>.
+          </p>
+
+          <div class="ticket__actions">
+            <a class="btn btn--primary" href="https://discord.gg/7KqduugrFQ" target="_blank" rel="noopener noreferrer">Join Discord as a member</a>
+            <button class="btn" id="playAgainBtn" type="button">Play again</button>
           </div>
-          <div class="ticket__title">SPECIAL PASS</div>
-          <div class="ticket__body">
-            <p class="ticket__copy">
-              Nice. Screenshot this and show it to the club managers to claim your <strong>2 special stickers</strong>.
-            </p>
-            <a class="btn btn--primary btn--wide" href="https://discord.gg/7KqduugrFQ" target="_blank"
-              rel="noopener noreferrer">
-              Join Discord to become a member
-            </a>
-            <button class="btn btn--ghost btn--wide" id="playAgainBtn" type="button">Play Again</button>
-          </div>
-          <div class="ticket__cut" aria-hidden="true"></div>
-        </div>
+        </article>
       </section>
+
     </main>
   </div>
 
-  <!-- THEME PICKER (bottom) -->
-  <div class="themebar" id="themebar" aria-label="Theme picker">
-    <div class="themebar__label">Theme</div>
-    <div class="themebar__swatches" role="group" aria-label="Theme colors">
-      <button class="swatch" type="button" data-theme="cyan" aria-label="Cyan theme"></button>
-      <button class="swatch" type="button" data-theme="purple" aria-label="Purple theme"></button>
-      <button class="swatch" type="button" data-theme="green" aria-label="Green theme"></button>
-      <button class="swatch" type="button" data-theme="amber" aria-label="Amber theme"></button>
+  <div class="themebar" id="themebar" role="group" aria-label="Theme">
+    <span class="themebar__label">Theme</span>
+    <div class="themebar__swatches">
+      <button class="swatch" type="button" data-theme="cyan" aria-label="Cyan" aria-pressed="false"></button>
+      <button class="swatch" type="button" data-theme="purple" aria-label="Purple" aria-pressed="false"></button>
+      <button class="swatch" type="button" data-theme="green" aria-label="Green" aria-pressed="false"></button>
+      <button class="swatch" type="button" data-theme="amber" aria-label="Amber" aria-pressed="false"></button>
     </div>
   </div>
 
-  <!-- MODAL -->
-  <div class="modal" id="modal" aria-hidden="true" role="dialog" aria-modal="true" aria-label="Message">
-    <div class="modal__backdrop" data-close="1"></div>
-    <div class="modal__sheet" role="document">
-      <div class="modal__title" id="modalTitle">Nice!</div>
-      <div class="modal__text" id="modalText">Message</div>
-      <div class="modal__actions">
-        <button class="btn btn--primary btn--wide" id="modalPrimaryBtn" type="button">Continue</button>
-      </div>
+  <div class="modal" id="modal" hidden>
+    <div class="modal__backdrop" id="modalBackdrop"></div>
+    <div class="modal__sheet" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalText">
+      <h2 class="modal__title" id="modalTitle"></h2>
+      <p class="modal__text" id="modalText"></p>
+      <button class="btn btn--primary" id="modalActionBtn" type="button">Continue</button>
     </div>
   </div>
 
-  <script src="script.js"></script>
+  <noscript><p class="noscript">This page needs JavaScript to run the games.</p></noscript>
 
+  <script src="script.js" defer></script>
 </body>
-
 </html>
